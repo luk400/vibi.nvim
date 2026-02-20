@@ -4,7 +4,7 @@
 > # Why?
 > #### If I have to vibecode, I atleast want an intuitive way to vibecode inside neovim and use already existing harnesses (like CC) instead of reinventing the wheel or using subpar agent implementations. Hence I started this project, which at the same time served as my playground and first experience of trying to produce a software package almost exclusively by using coding agents. This simple plugin doesn't do much, other than provide a floating window for your AI CLI tool of choice and offering features to merge the generated code from your agents into your buffers. Code was generated using GLM-5 and refactored using Gemini 3 Pro.
 
-# vibe.nvim
+# vibi.nvim
 
 Vibe is a Neovim plugin designed to manage AI coding sessions. It runs your AI CLI tools (like Claude Code, Aider, etc.) in a floating terminal, but creates a temporary Git worktree for the session.
 
@@ -32,7 +32,7 @@ Using `lazy.nvim`:
 
 ```lua
 {
-  "luk400/vibe.nvim",
+  "luk400/vibi.nvim",
   config = function()
     require("vibe").setup({
       -- command = "claude", -- Default is claude, change if using aider etc.
