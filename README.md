@@ -1,6 +1,8 @@
 # WARNING
 
-### This plugin is my first experiment regarding vibe coding, just to see what all the fuzz is about. Most of the code in this repo was generated and not carefully checked (including most of the following README), and absolutely no stability is promised, bugs are guaranteed. This is likely not a plugin you want to actually use, so I'd recommend looking at other solutions for whatever you're trying to accomplish. If you're feeling adventurous and still want to try my sloppy plugin, more power to you.
+
+### $\color{#ff0000}{\text{This plugin is my first experiment regarding vibe coding, just to see what all the fuzz is about. Most of the code in this repo was generated and not carefully checked (including most of the following README), and absolutely no stability is promised, bugs are guaranteed. This is likely not a plugin you want to actually use, so I'd recommend looking at other solutions for whatever you're trying to accomplish. If you're feeling adventurous and still want to try my sloppy plugin, more power to you.}}$
+
 
 # vibe.nvim
 
