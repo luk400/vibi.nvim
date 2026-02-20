@@ -54,54 +54,54 @@ local M = {}
 
 ---@type VibeConfig
 M.defaults = {
-  command = "claude",
-  position = "right",
-  width = 0.5,
-  height = 0.8,
-  keymap = "<leader>v",
-  border = "rounded",
-  on_open = "save_all",
-  on_close = "reload",
-  quit_protection = true,
-  diff = {
-    enabled = true,
-    poll_interval = 500, -- ms, 0 to disable
-    on_focus = true,
-    on_enter = true,
-    on_cursor_hold = true,
-    on_write = true,
-    max_lines = 100,
-    review_user_additions = true, -- If false, auto-accept user additions
-    raw_mode = false, -- Show raw git conflict markers instead of virtual lines
-    keymaps = {
-      accept_hunk = "<leader>da",
-      reject_hunk = "<leader>dr",
-      accept_all = "<leader>dA",
-      reject_all = "<leader>dR",
-      prev_hunk = "[d",
-      next_hunk = "]d",
-      toggle_preview = "<leader>dp",
-    },
-    conflict_popup = {
-      enabled = true,           -- Show popup for overlapping changes
-      width = 60,
-      max_height = 20,
-      keymaps = {
-        accept_user = "u",      -- Keep user's version only
-        accept_ai = "a",        -- Accept AI's version only
-        accept_both = "b",      -- Keep both user + AI changes
-        accept_none = "n",      -- Delete all changes in range
-        close = "q",
-      },
-    },
-  },
-  worktree = {
-    -- By default, don't copy untracked files to worktree
-    -- Set to true to copy all, or provide a list of glob patterns
-    copy_untracked = false,
-    -- Use .vibeinclude file if present (takes precedence over copy_untracked patterns)
-    use_vibeinclude = true,
-  },
+	command = "claude",
+	position = "right",
+	width = 0.5,
+	height = 0.8,
+	keymap = "<leader>v",
+	border = "rounded",
+	on_open = "save_all",
+	on_close = "reload",
+	quit_protection = true,
+	diff = {
+		enabled = true,
+		poll_interval = 500, -- ms, 0 to disable
+		on_focus = true,
+		on_enter = true,
+		on_cursor_hold = true,
+		on_write = true,
+		max_lines = 100,
+		review_user_additions = true, -- If false, auto-accept user additions
+		raw_mode = false, -- Show raw git conflict markers instead of virtual lines
+		keymaps = {
+			accept_hunk = "<leader>da",
+			reject_hunk = "<leader>dr",
+			accept_all = "<leader>dA",
+			reject_all = "<leader>dR",
+			prev_hunk = "[d",
+			next_hunk = "]d",
+			toggle_preview = "<leader>dp",
+		},
+		conflict_popup = {
+			enabled = true, -- Show popup for overlapping changes
+			width = 60,
+			max_height = 20,
+			keymaps = {
+				accept_user = "u", -- Keep user's version only
+				accept_ai = "a", -- Accept AI's version only
+				accept_both = "b", -- Keep both user + AI changes
+				accept_none = "n", -- Delete all changes in range
+				close = "q",
+			},
+		},
+	},
+	worktree = {
+		-- By default, don't copy untracked files to worktree
+		-- Set to true to copy all, or provide a list of glob patterns
+		copy_untracked = false,
+		-- Use .vibeinclude file if present (takes precedence over copy_untracked patterns)
+		use_vibeinclude = true,
+	},
 }
 
 ---@type VibeConfig
@@ -109,8 +109,8 @@ M.options = {}
 
 ---@param opts VibeConfig|nil
 function M.setup(opts)
-  M.options = vim.tbl_deep_extend("force", M.defaults, opts or {})
-  return M.options
+	M.options = vim.tbl_deep_extend("force", M.defaults, opts or {})
+	return M.options
 end
 
 return M

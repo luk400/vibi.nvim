@@ -4,13 +4,13 @@ vim.opt.rtp:prepend(cwd)
 
 -- Resolve plenary.nvim
 local plenary_paths = {
-  "/workspace/plenary.nvim",
+	"/workspace/plenary.nvim",
 }
 for _, path in ipairs(plenary_paths) do
-  if vim.fn.isdirectory(path) == 1 then
-    vim.opt.rtp:prepend(path)
-    break
-  end
+	if vim.fn.isdirectory(path) == 1 then
+		vim.opt.rtp:prepend(path)
+		break
+	end
 end
 
 -- Disable swap and undo for headless speed
@@ -25,15 +25,15 @@ vim.env.GIT_COMMITTER_EMAIL = "test@vibe.test"
 
 -- Configure Vibe with test-safe settings
 require("vibe.config").setup({
-  -- Use a dummy command that won't exit immediately so we can test terminal states
-  command = "sleep 10",
-  quit_protection = false,
-  on_open = "none",
-  on_close = "none",
-  diff = {
-    enabled = true,
-    poll_interval = 0, -- Disable async polling for tests
-  },
+	-- Use a dummy command that won't exit immediately so we can test terminal states
+	command = "sleep 10",
+	quit_protection = false,
+	on_open = "none",
+	on_close = "none",
+	diff = {
+		enabled = true,
+		poll_interval = 0, -- Disable async polling for tests
+	},
 })
 
 -- Ensure test cache directory exists
