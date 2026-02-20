@@ -1,0 +1,143 @@
+# vibe.nvim
+
+Vibe is a Neovim plugin designed to manage AI coding sessions. It runs your AI CLI tools (like Claude Code, Aider, etc.) in a floating terminal, but creates a temporary Git worktree for the session.
+
+This means the AI edits a "shadow" copy of your codebase. Your actual files remain untouched until you explicitly review and accept the changes.
+
+## Why?
+
+AI coding tools are useful but can be destructive. If they hallucinate or delete code, undoing the damage can be annoying. Vibe isolates the AI so you can verify its work safely.
+
+## Features
+
+*   **Worktree Isolation:** Automatically creates a git worktree and branch (`vibe-<uuid>`) for every session.
+*   **Floating Terminal:** Runs your specified command in a floating window.
+*   **Diff & Review:** Virtual text diffs show exactly what the AI changed.
+*   **Conflict Resolution:** A custom 3-way merge view to handle conflicts between your current changes and the AI's work.
+*   **Persistence:** Sessions are saved to disk. You can close Neovim, come back later, and resume the session.
+*   **Safety:** Quit protection warns you if you try to exit Neovim while there are unreviewed AI changes.
+
+## Prerequisites
+
+*   Neovim 0.11+
+*   Git (must be available in your PATH)
+*   An AI CLI tool (e.g., `claude`, `aider`, or any shell command)
+
+## Installation
+
+Using `lazy.nvim`:
+
+```lua
+{
+  "your-username/vibe.nvim",
+  config = function()
+    require("vibe").setup({
+      -- command = "claude", -- Default is claude, change if using aider etc.
+    })
+  end
+}
+```
+
+## Configuration
+
+Here are the default options. You likely only need to change the `command`.
+
+```lua
+require("vibe").setup({
+  -- The command to run in the terminal (e.g., "claude", "aider", "bash")
+  command = "claude",
+  
+  -- Window sizing and positioning
+  position = "right", -- "right", "left", "centered", "top", "bottom"
+  width = 0.5,
+  height = 0.8,
+  border = "rounded",
+  
+  -- Keymap to toggle the window
+  keymap = "<leader>v",
+
+  -- Behavior
+  on_open = "save_all", -- "save_all", "save_current", "none"
+  on_close = "reload",  -- "reload", "none"
+  quit_protection = true, -- Warn on quit if sessions exist
+  
+  diff = {
+    enabled = true,
+    -- Inline diff keymaps
+    keymaps = {
+      accept_hunk = "<leader>da",
+      reject_hunk = "<leader>dr",
+      accept_all = "<leader>dA",
+      reject_all = "<leader>dR",
+      prev_hunk = "[d",
+      next_hunk = "]d",
+      toggle_preview = "<leader>dp",
+    },
+    -- Small popup for handling overlapping changes
+    conflict_popup = {
+      enabled = true,
+      keymaps = {
+        accept_user = "u",
+        accept_ai = "a",
+        accept_both = "b",
+        accept_none = "n",
+        close = "q",
+      },
+    },
+  },
+  
+  worktree = {
+    -- Untracked files are not copied to the worktree by default.
+    -- Set to true to copy all, or provide a list of glob patterns.
+    copy_untracked = false,
+  }
+})
+```
+
+## Usage
+
+### Starting a Session
+Run `:Vibe` (or press `<leader>v` if configured).
+This creates a new worktree and opens the terminal running your configured command. You talk to the AI, and it edits files in that worktree.
+
+### Reviewing Changes
+When the AI is done, run `:VibeReview`.
+This opens a list of files the AI modified. Select a file to view the diff.
+
+### Resolving Conflicts
+If both you and the AI modified the same lines, Vibe opens a conflict resolution buffer. It creates "collapsed" conflict markers.
+
+1.  Hover over a conflict marker to see a floating preview of the diff.
+2.  Use the following keys on the conflict line:
+    *   `u`: Keep **Yours** (User)
+    *   `a`: Keep **AI** (Theirs)
+    *   `b`: Keep **Both**
+    *   `n`: Keep **None** (Delete block)
+    *   `A`: Accept all remaining changes
+
+### Managing Sessions
+
+*   `:VibeList`: Show all active and background sessions.
+*   `:VibeResume`: Resume a session from a previous Neovim instance.
+*   `:VibeKill`: Force kill a session and its terminal process.
+
+## How it works
+
+1.  **Init:** Vibe initializes a `vibe-worktrees` directory in your cache path.
+2.  **Branch:** It creates a new branch `vibe-<timestamp>-<uuid>` off your current HEAD.
+3.  **Worktree:** It creates a git worktree for that branch.
+4.  **Sync:**
+    *   When you `accept` a change, Vibe copies the content from the worktree file to your actual file.
+    *   When you `reject`, it ignores it.
+    *   Once a file is fully resolved, the worktree version is synced to match your local version to keep the AI context up to date.
+5.  **Cleanup:** When you delete a session, the worktree and temporary branch are removed.
+
+## Status Line
+
+Vibe provides a simple status indicator API if you want to integrate it into your statusline (lualine/heirline/etc).
+
+The global status is handled automatically via a small floating window in the top right corner by default, but you can disable that and query `require("vibe").is_open()`.
+
+## License
+
+MIT
