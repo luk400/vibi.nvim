@@ -6,7 +6,7 @@ This means the AI edits a "shadow" copy of your codebase. Your actual files rema
 
 ## Why?
 
-AI coding tools are useful but can be destructive. If they hallucinate or delete code, undoing the damage can be annoying. Vibe isolates the AI so you can verify its work safely.
+Just wanted an intuitive way to vibecode in neovim and use existing and harnesses like claude code instead of reinventing the wheel. This plugin doesn't do much, other than provide a floating window for your AI CLI tool of choice and offering some features to merge the generated code from your agents into your buffers.
 
 ## Features
 
