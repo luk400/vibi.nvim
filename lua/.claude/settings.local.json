@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(luac:*)",
+      "Bash(nvim --headless -c \"lua dofile\\(''''git.lua''''\\)\" -c \"q\")",
+      "Bash(lua:*)"
+    ]
+  }
+}
