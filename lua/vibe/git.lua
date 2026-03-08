@@ -255,6 +255,33 @@ function M.create_worktree(session_name, repo_cwd)
 		end
 	end
 
+	-- Filter files to only include those under the selected repo_cwd
+	-- This handles the case where user selected a subdirectory as their working directory
+	if repo_cwd ~= repo_root then
+		-- Calculate relative path from repo_root to repo_cwd
+		local cwd_relative = repo_cwd
+		if vim.startswith(cwd_relative, repo_root .. "/") then
+			cwd_relative = cwd_relative:sub(#repo_root + 2)
+		elseif vim.startswith(cwd_relative, repo_root) then
+			cwd_relative = cwd_relative:sub(#repo_root + 1)
+			if cwd_relative:sub(1, 1) == "/" then
+				cwd_relative = cwd_relative:sub(2)
+			end
+		end
+
+		-- Only keep files that are under the selected directory
+		if cwd_relative ~= "" then
+			local filtered_files = {}
+			local cwd_prefix = cwd_relative:gsub("([^%w])", "%%%1") .. "/"
+			for file, _ in pairs(files_to_copy) do
+				if vim.startswith(file, cwd_relative .. "/") or file == cwd_relative then
+					filtered_files[file] = true
+				end
+			end
+			files_to_copy = filtered_files
+		end
+	end
+
 	for file, _ in pairs(files_to_copy) do
 		local src_path = repo_root .. "/" .. file
 		local dst_path = worktree_path .. "/" .. file
@@ -363,11 +390,28 @@ function M.scan_for_vibe_worktrees()
 				end
 
 				if main_repo_root and vim.fn.isdirectory(main_repo_root) == 1 then
+					-- Try to get the first commit (snapshot commit) from git log
 					local log_output = git_cmd(
 						{ "log", "--reverse", "--format=%H", "-n", "1" },
 						{ cwd = worktree_path, ignore_error = true }
 					)
 					local snapshot_commit = log_output and log_output:gsub("^%s+", ""):gsub("%s+$", "") or nil
+
+					-- Fallback: try to get first commit via rev-list if log failed
+					if not snapshot_commit or snapshot_commit == "" then
+						local first_commit = git_cmd(
+							{ "rev-list", "--max-parents=0", "HEAD" },
+							{ cwd = worktree_path, ignore_error = true }
+						)
+						if first_commit and first_commit ~= "" then
+							snapshot_commit = first_commit:gsub("^%s+", ""):gsub("%s+$", "")
+						end
+					end
+
+					-- Last resort: try persisted info
+					if (not snapshot_commit or snapshot_commit == "") and persisted_by_path[worktree_path] then
+						snapshot_commit = persisted_by_path[worktree_path].snapshot_commit
+					end
 
 					local persisted_info = persisted_by_path[worktree_path]
 					local created_at = persisted_info and persisted_info.created_at or os.time()
@@ -454,8 +498,24 @@ function M.get_worktree_changed_files(worktree_path)
 		return {}
 	end
 
+	-- Handle nil snapshot_commit defensively by finding a fallback
+	local snapshot_commit = info.snapshot_commit
+	if not snapshot_commit or snapshot_commit == "" then
+		-- Try to get the first commit as fallback
+		local first_commit = git_cmd(
+			{ "rev-list", "--max-parents=0", "HEAD" },
+			{ cwd = worktree_path, ignore_error = true }
+		)
+		if first_commit and first_commit ~= "" then
+			snapshot_commit = first_commit:gsub("^%s+", ""):gsub("%s+$", "")
+		else
+			-- If no commits or error, compare against empty tree to show all files
+			snapshot_commit = "4b825dc642cb6eb9a060e54bf8d69288fbee4904" -- git's empty tree hash
+		end
+	end
+
 	local output = git_cmd(
-		{ "diff", "--name-only", info.snapshot_commit },
+		{ "diff", "--name-only", snapshot_commit },
 		{ cwd = worktree_path, ignore_error = true }
 	)
 	local untracked_output = git_cmd(
