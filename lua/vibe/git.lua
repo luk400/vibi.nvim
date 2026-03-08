@@ -103,7 +103,9 @@ local function git_cmd(args, opts)
 end
 
 local function get_worktree_base_dir()
-	return vim.fn.stdpath("cache") .. "/vibe-worktrees"
+	local opts = config.options or {}
+	local worktree_opts = opts.worktree or {}
+	return worktree_opts.worktree_dir or vim.fn.stdpath("cache") .. "/vibe-worktrees"
 end
 
 function M.is_git_repo(cwd)

@@ -22,7 +22,10 @@ local M = {}
 --- Get the path to the sessions file
 ---@return string
 local function get_sessions_file()
-	local cache_dir = vim.fn.stdpath("cache") .. "/vibe-worktrees"
+	local config = require("vibe.config")
+	local opts = config.options or {}
+	local worktree_opts = opts.worktree or {}
+	local cache_dir = worktree_opts.worktree_dir or vim.fn.stdpath("cache") .. "/vibe-worktrees"
 	vim.fn.mkdir(cache_dir, "p")
 	return cache_dir .. "/sessions.json"
 end

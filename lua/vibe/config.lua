@@ -38,6 +38,7 @@ local M = {}
 ---@class VibeWorktreeConfig
 ---@field copy_untracked boolean|string[] Whether to copy untracked files to worktree (true = all, false = none, or list of glob patterns)
 ---@field use_vibeinclude boolean Use .vibeinclude file for untracked patterns (takes precedence if present)
+---@field worktree_dir string|nil Custom directory for worktrees (defaults to stdpath("cache") .. "/vibe-worktrees")
 
 ---@class VibeConfig
 ---@field command string Command to run in the terminal
@@ -101,6 +102,8 @@ M.defaults = {
 		copy_untracked = false,
 		-- Use .vibeinclude file if present (takes precedence over copy_untracked patterns)
 		use_vibeinclude = true,
+		-- Custom directory for worktrees (defaults to stdpath("cache") .. "/vibe-worktrees")
+		worktree_dir = nil,
 	},
 }
 

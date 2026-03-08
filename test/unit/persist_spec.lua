@@ -1,10 +1,13 @@
 -- test/unit/persist_spec.lua
 local persist = require("vibe.persist")
+local config = require("vibe.config")
 local helpers = require("test.helpers.git_repo")
 local eq = assert.are.equal
 local is_not_nil = assert.is_not_nil
 
 describe("Session Persistence", function()
+	-- Initialize config with defaults to ensure consistent path
+	config.setup({})
 	local cache_dir = vim.fn.stdpath("cache") .. "/vibe-worktrees"
 
 	before_each(function()
