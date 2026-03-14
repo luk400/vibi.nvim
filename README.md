@@ -14,11 +14,21 @@ This means the AI edits a "shadow" copy of your codebase. Your actual files rema
 ## Features
 
 *   **Worktree Isolation:** Automatically creates a git worktree and branch (`vibe-<uuid>`) for every session.
-*   **Floating Terminal:** Runs your specified command in a floating window.
-*   **Diff & Review:** Virtual text diffs show exactly what the AI changed.
-*   **Conflict Resolution:** A custom 3-way merge view to handle conflicts between your current changes and the AI's work.
+*   **Floating Terminal:** Runs your specified command in a configurable floating window.
+*   **Smart Toggle:** `:Vibe` adapts to context — opens a directory picker with no sessions, toggles with one, or lists with many.
+*   **Session Rename:** Rename active sessions with `:VibeRename old new`.
+*   **Session History:** Records completed sessions for later reference via `:VibeHistory`.
+*   **Terminal Logging:** Saves terminal scrollback to disk on session exit for post-mortem review via `:VibeLog`.
+*   **Diff & Review:** Virtual text diffs show exactly what the AI changed, with inline accept/reject.
+*   **Side-by-Side Diff:** Optional split mode (`diff.mode = "split"`) for side-by-side file comparison.
+*   **Conflict Resolution:** A custom 3-way merge view with collapsed markers and inline preview popups.
+*   **Undo Support:** Accept or reject individual hunks; keep yours, AI's, both, or none for overlapping changes.
+*   **Auto-Review Popup:** Automatically shows the review dialog when AI activity stops (configurable timeout).
 *   **Persistence:** Sessions are saved to disk. You can close Neovim, come back later, and resume the session.
 *   **Safety:** Quit protection warns you if you try to exit Neovim while there are unreviewed AI changes.
+*   **Lualine Statusline:** `require("vibe").statusline` shows active/total session counts.
+*   **Context-Sensitive Help:** `:VibeHelp` shows relevant keymaps for the current buffer context.
+*   **which-key Integration:** Automatically registers `<leader>d` (Vibe Diff) and `<leader>v` (Vibe Terminal) groups.
 
 ## Prerequisites
 
@@ -49,24 +59,34 @@ Here are the default options. You likely only need to change the `command`.
 require("vibe").setup({
   -- The command to run in the terminal (e.g., "claude", "aider", "bash")
   command = "claude",
-  
+
   -- Window sizing and positioning
   position = "right", -- "right", "left", "centered", "top", "bottom"
   width = 0.5,
   height = 0.8,
   border = "rounded",
-  
-  -- Keymap to toggle the window
+
+  -- Keymap to toggle the window (set to false to disable)
   keymap = "<leader>v",
 
   -- Behavior
   on_open = "save_all", -- "save_all", "save_current", "none"
   on_close = "reload",  -- "reload", "none"
   quit_protection = true, -- Warn on quit if sessions exist
-  
+
   diff = {
     enabled = true,
-    -- Inline diff keymaps
+    mode = "inline", -- "inline" (virtual text) or "split" (side-by-side)
+    poll_interval = 500, -- ms, 0 to disable
+    on_focus = true,
+    on_enter = true,
+    on_cursor_hold = true,
+    on_write = true,
+    max_lines = 100,
+    review_user_additions = true, -- Show user additions with +~ and require accept/reject
+    raw_mode = false, -- Show raw git conflict markers instead of collapsed UI
+
+    -- Keymaps for file buffers (prefixed with <leader>d)
     keymaps = {
       accept_hunk = "<leader>da",
       reject_hunk = "<leader>dr",
@@ -75,56 +95,146 @@ require("vibe").setup({
       prev_hunk = "[d",
       next_hunk = "]d",
       toggle_preview = "<leader>dp",
+      keep_ours = "<leader>du",
+      keep_both = "<leader>db",
+      keep_none = "<leader>dn",
     },
-    -- Small popup for handling overlapping changes
+
+    -- Inline popup for overlapping (conflict) changes
     conflict_popup = {
       enabled = true,
+      width = 60,
+      max_height = 20,
       keymaps = {
-        accept_user = "u",
-        accept_ai = "a",
-        accept_both = "b",
-        accept_none = "n",
+        accept_user = "u", -- Keep user's version only
+        accept_ai = "a",   -- Accept AI's version only
+        accept_both = "b",  -- Keep both user + AI changes
+        accept_none = "n",  -- Delete all changes in range
         close = "q",
       },
     },
+
+    -- Raw conflict buffer keymaps (when raw_mode = true)
+    conflict_buffer = {
+      keymaps = {
+        keep_ours = "<leader>du",
+        keep_theirs = "<leader>da",
+        keep_both = "<leader>db",
+        keep_none = "<leader>dn",
+        accept_all = "<leader>dA",
+        reject_all = "<leader>dR",
+        next_conflict = "]c",
+        prev_conflict = "[c",
+        quit = "q",
+      },
+    },
   },
-  
+
+  -- Session history
+  history = {
+    enabled = true,      -- Record session history
+    max_entries = 50,     -- Maximum history entries to keep
+  },
+
+  -- Terminal logging
+  log = {
+    enabled = true,      -- Log terminal scrollback on exit
+    max_size_mb = 50,    -- Max total log directory size
+    max_files = 20,      -- Max number of log files
+  },
+
+  -- Auto-review popup
+  auto_review = {
+    enabled = true,      -- Show review dialog when AI finishes
+    timeout = 2000,      -- Inactivity timeout in ms before showing review
+  },
+
   worktree = {
-    -- Untracked files are not copied to the worktree by default.
-    -- Set to true to copy all, or provide a list of glob patterns.
+    -- Untracked files: false = none, true = all, or list of glob patterns
     copy_untracked = false,
-  }
+    -- Use .vibeinclude file if present (takes precedence over copy_untracked)
+    use_vibeinclude = true,
+    -- Custom directory for worktrees (defaults to stdpath("cache")/vibe-worktrees)
+    worktree_dir = nil,
+  },
 })
 ```
 
-## Usage
+## Commands
 
-### Starting a Session
-Run `:Vibe` (or press `<leader>v` if configured).
-This creates a new worktree and opens the terminal running your configured command. You talk to the AI, and it edits files in that worktree.
+| Command | Description |
+|---------|-------------|
+| `:Vibe [name]` | Smart toggle (0 sessions → picker, 1 → toggle, N → list) |
+| `:VibeList` | List all sessions |
+| `:VibeKill [name]` | Kill a session |
+| `:VibeReview` | Review AI changes |
+| `:VibeResume` | Resume paused session |
+| `:VibeStatus` | Print session summary |
+| `:VibeDiff` | Show inline diff for current file |
+| `:VibeRename old new` | Rename a session |
+| `:VibeLog [name]` | View terminal scrollback log |
+| `:VibeHistory` | Show session history |
+| `:VibeHelp` | Context-sensitive help |
 
-### Reviewing Changes
-When the AI is done, run `:VibeReview`.
-This opens a list of files the AI modified. Select a file to view the diff.
+## Keymaps
 
-### Resolving Conflicts
-If both you and the AI modified the same lines, Vibe opens a conflict resolution buffer. It creates "collapsed" conflict markers.
+### Terminal Window
 
-1.  Hover over a conflict marker to see a floating preview of the diff.
-2.  Use the following keys on the conflict line:
-    *   `u`: Keep **Yours** (User)
-    *   `a`: Keep **AI** (Theirs)
-    *   `b`: Keep **Both**
-    *   `n`: Keep **None** (Delete block)
-    *   `A`: Accept all remaining changes
+*   `q` / `<Esc>`: Close terminal window
+*   `<M-h/j/k/l>`: Navigate to adjacent windows
+*   `<C-n>` / `<C-p>`: Cycle between sessions
 
-### Managing Sessions
+### Diff / Review (File Buffers)
 
-*   `:VibeList`: Show all active and background sessions.
-*   `:VibeResume`: Resume a session from a previous Neovim instance.
-*   `:VibeKill`: Force kill a session and its terminal process.
+All diff keymaps use the `<leader>d` prefix:
 
-## How it works
+*   `<leader>da`: Accept current hunk
+*   `<leader>dr`: Reject current hunk
+*   `<leader>dA`: Accept all hunks in file
+*   `<leader>dR`: Reject all hunks in file
+*   `[d` / `]d`: Jump to previous/next hunk
+*   `<leader>dp`: Toggle diff preview
+
+### Conflict Resolution (Preview Popups)
+
+When a conflict popup is open, single-letter keys apply:
+
+*   `u`: Keep **Yours** (User)
+*   `a`: Keep **AI's** (Theirs)
+*   `b`: Keep **Both**
+*   `n`: Keep **None** (Delete block)
+*   `q`: Close popup
+
+In file buffers, the same actions are under `<leader>d`:
+
+*   `<leader>du`: Keep yours
+*   `<leader>db`: Keep both
+*   `<leader>dn`: Keep none
+
+### File List Dialog
+
+*   `j` / `k`: Navigate files
+*   `<CR>`: Open file diff
+*   `A`: Accept all changes
+
+## Statusline
+
+Vibe provides a lualine-compatible statusline component:
+
+```lua
+-- lualine example
+require("lualine").setup({
+  sections = {
+    lualine_x = { require("vibe").statusline },
+  },
+})
+```
+
+Returns `"Vibe(active/total)"` when sessions exist, empty string otherwise.
+
+You can also query `require("vibe").is_open()` for simple open/closed state.
+
+## How It Works
 
 1.  **Init:** Vibe initializes a `vibe-worktrees` directory in your cache path.
 2.  **Branch:** It creates a new branch `vibe-<timestamp>-<uuid>` off your current HEAD.
@@ -134,12 +244,6 @@ If both you and the AI modified the same lines, Vibe opens a conflict resolution
     *   When you `reject`, it ignores it.
     *   Once a file is fully resolved, the worktree version is synced to match your local version to keep the AI context up to date.
 5.  **Cleanup:** When you delete a session, the worktree and temporary branch are removed.
-
-## Status Line
-
-Vibe provides a simple status indicator API if you want to integrate it into your statusline (lualine/heirline/etc).
-
-The global status is handled automatically via a small floating window in the top right corner by default, but you can disable that and query `require("vibe").is_open()`.
 
 ## License
 

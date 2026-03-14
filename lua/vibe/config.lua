@@ -66,6 +66,7 @@ M.defaults = {
 	quit_protection = true,
 	diff = {
 		enabled = true,
+		mode = "inline", -- "inline" (default) or "split" (side-by-side)
 		poll_interval = 500, -- ms, 0 to disable
 		on_focus = true,
 		on_enter = true,
@@ -82,6 +83,9 @@ M.defaults = {
 			prev_hunk = "[d",
 			next_hunk = "]d",
 			toggle_preview = "<leader>dp",
+			keep_ours = "<leader>du",
+			keep_both = "<leader>db",
+			keep_none = "<leader>dn",
 		},
 		conflict_popup = {
 			enabled = true, -- Show popup for overlapping changes
@@ -95,6 +99,32 @@ M.defaults = {
 				close = "q",
 			},
 		},
+		conflict_buffer = {
+			keymaps = {
+				keep_ours = "<leader>du",
+				keep_theirs = "<leader>da",
+				keep_both = "<leader>db",
+				keep_none = "<leader>dn",
+				accept_all = "<leader>dA",
+				reject_all = "<leader>dR",
+				next_conflict = "]c",
+				prev_conflict = "[c",
+				quit = "q",
+			},
+		},
+	},
+	history = {
+		enabled = true, -- Record session history
+		max_entries = 50, -- Maximum history entries to keep
+	},
+	log = {
+		enabled = true, -- Log terminal scrollback on exit
+		max_size_mb = 50, -- Max total log directory size
+		max_files = 20, -- Max number of log files
+	},
+	auto_review = {
+		enabled = true, -- Show review dialog automatically when AI finishes
+		timeout = 2000, -- Time in ms to wait before showing review
 	},
 	worktree = {
 		-- By default, don't copy untracked files to worktree
@@ -110,9 +140,40 @@ M.defaults = {
 ---@type VibeConfig
 M.options = {}
 
+local function validate_options(options)
+	local valid_positions = { right = true, left = true, centered = true, top = true, bottom = true }
+	if options.position and not valid_positions[options.position] then
+		vim.notify(
+			string.format("[Vibe] Invalid position '%s', falling back to 'right'", options.position),
+			vim.log.levels.WARN
+		)
+		options.position = "right"
+	end
+
+	if options.width and (type(options.width) ~= "number" or options.width <= 0 or options.width > 1) then
+		vim.notify("[Vibe] Invalid width (must be 0-1), falling back to 0.5", vim.log.levels.WARN)
+		options.width = 0.5
+	end
+
+	if options.height and (type(options.height) ~= "number" or options.height <= 0 or options.height > 1) then
+		vim.notify("[Vibe] Invalid height (must be 0-1), falling back to 0.8", vim.log.levels.WARN)
+		options.height = 0.8
+	end
+
+	local valid_borders = { none = true, single = true, double = true, rounded = true, solid = true, shadow = true }
+	if options.border and type(options.border) == "string" and not valid_borders[options.border] then
+		vim.notify(
+			string.format("[Vibe] Invalid border '%s', falling back to 'rounded'", options.border),
+			vim.log.levels.WARN
+		)
+		options.border = "rounded"
+	end
+end
+
 ---@param opts VibeConfig|nil
 function M.setup(opts)
 	M.options = vim.tbl_deep_extend("force", M.defaults, opts or {})
+	validate_options(M.options)
 	return M.options
 end
 

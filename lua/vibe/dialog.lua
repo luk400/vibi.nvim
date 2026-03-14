@@ -25,12 +25,22 @@ M.current_session_name = nil
 ---@type string
 M.review_mode = "manual"
 
+---@type table<string, {added: integer, removed: integer}> Per-file hunk stats cache
+M.hunk_cache = {}
+
 --- Open the modified files dialog for a worktree
 ---@param worktree_path string|nil The worktree to review (uses first available if nil)
 ---@param worktree_info table|nil Optional worktree info (avoids lookup)
 ---@param review_mode string|nil Mode for reviewing ("auto" or "manual")
 function M.show(worktree_path, worktree_info, review_mode)
 	M.close()
+
+	-- Full state reset before any early returns
+	M.changed_files = {}
+	M.selected_idx = 1
+	M.review_mode = review_mode or "manual"
+	M.current_worktree_path = nil
+	M.current_session_name = nil
 
 	if not worktree_path then
 		local worktrees = git.get_worktrees_with_changes()
@@ -55,8 +65,20 @@ function M.show(worktree_path, worktree_info, review_mode)
 
 	M.current_worktree_path = worktree_path
 	M.current_session_name = info.name
-	M.review_mode = review_mode or M.review_mode or "manual"
 	M.changed_files = git.get_unresolved_files(worktree_path)
+	M.hunk_cache = {}
+	for _, file in ipairs(M.changed_files) do
+		local user_file_path = info.repo_root .. "/" .. file
+		local ok, hunks = pcall(git.get_worktree_file_hunks, worktree_path, file, user_file_path)
+		if ok and hunks then
+			local added, removed = 0, 0
+			for _, hunk in ipairs(hunks) do
+				added = added + #(hunk.added_lines or {})
+				removed = removed + #(hunk.removed_lines or {})
+			end
+			M.hunk_cache[file] = { added = added, removed = removed }
+		end
+	end
 
 	if #M.changed_files == 0 then
 		vim.notify("[Vibe] No unresolved files in this session", vim.log.levels.INFO)
@@ -74,6 +96,7 @@ function M.show(worktree_path, worktree_info, review_mode)
 		title = "Vibe: Modified Files (" .. info.name .. ")",
 		cursorline = true,
 		zindex = 200,
+		no_default_keymaps = true,
 	})
 
 	M.dialog_bufnr = bufnr
@@ -112,7 +135,12 @@ function M.render()
 
 	for i, file in ipairs(M.changed_files) do
 		local prefix = i == M.selected_idx and "▶ " or "  "
-		table.insert(lines, prefix .. file)
+		local stats = M.hunk_cache[file]
+		local suffix = ""
+		if stats then
+			suffix = string.format("  +%d -%d", stats.added, stats.removed)
+		end
+		table.insert(lines, prefix .. file .. suffix)
 	end
 
 	table.insert(lines, "")
@@ -122,7 +150,9 @@ function M.render()
 	)
 	table.insert(lines, "<CR> view file  │  A accept all  │  q back")
 
+	vim.bo[M.dialog_bufnr].modifiable = true
 	vim.api.nvim_buf_set_lines(M.dialog_bufnr, 0, -1, false, lines)
+	vim.bo[M.dialog_bufnr].modifiable = false
 
 	for i, _ in ipairs(M.changed_files) do
 		local line_idx = i + 1
@@ -172,11 +202,12 @@ function M.setup_keymaps()
 
 	vim.keymap.set("n", "<CR>", M.jump_to_file, opts)
 	vim.keymap.set("n", "A", M.accept_all, opts)
-	vim.keymap.set("n", "q", function()
+	local function back_to_review()
 		M.close()
 		require("vibe.session").show_review_list()
-	end, opts)
-	vim.keymap.set("n", "<Esc>", M.close, opts)
+	end
+	vim.keymap.set("n", "q", back_to_review, opts)
+	vim.keymap.set("n", "<Esc>", back_to_review, opts)
 end
 
 function M.jump_to_file()
@@ -215,6 +246,14 @@ function M.accept_all()
 	if not M.current_worktree_path then
 		return
 	end
+	local file_count = #M.changed_files
+	if vim.fn.confirm(
+		string.format("Accept ALL changes in %d file(s)? This cannot be undone.", file_count),
+		"&Yes\n&No",
+		2
+	) ~= 1 then
+		return
+	end
 	local ok, err = git.accept_all_from_worktree(M.current_worktree_path)
 	if not ok then
 		vim.notify("[Vibe] Failed to accept all: " .. (err or "unknown error"), vim.log.levels.ERROR)
@@ -239,17 +278,6 @@ function M.setup_highlights()
 	vim.api.nvim_set_hl(0, "VibeDialogFile", { link = "Normal" })
 	vim.api.nvim_set_hl(0, "VibeDialogSelected", { link = "Visual" })
 	vim.api.nvim_set_hl(0, "VibeDialogFooter", { link = "Comment" })
-end
-
-local original_show = M.show
-function M.show_compat(worktree_path)
-	if not worktree_path then
-		local worktrees = git.get_worktrees_with_changes()
-		if #worktrees > 0 then
-			worktree_path = worktrees[1].worktree_path
-		end
-	end
-	original_show(worktree_path, nil, "manual")
 end
 
 return M

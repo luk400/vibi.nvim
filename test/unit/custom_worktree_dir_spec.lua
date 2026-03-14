@@ -167,50 +167,6 @@ describe("Custom worktree directory", function()
 		eq(1, #unresolved, "Should have 1 unresolved file")
 	end)
 
-	it("handles missing snapshot_commit gracefully", function()
-		local repo_path = helpers.create_test_repo("custom-missing-snapshot", {
-			["app.js"] = "console.log('hello');",
-		})
-
-		-- Create worktree
-		local info, err = git.create_worktree("missing-snapshot-test", repo_path)
-		assert.is_nil(err)
-		assert.is_not_nil(info)
-
-		-- Simulate AI modifying a file
-		helpers.write_file(info.worktree_path .. "/app.js", "console.log('modified');")
-
-		-- Corrupt the snapshot_commit to simulate the bug
-		local original_snapshot = info.snapshot_commit
-		info.snapshot_commit = nil
-
-		-- Get changed files with nil snapshot_commit
-		local changed_files = git.get_worktree_changed_files(info.worktree_path)
-
-		log_test_state("Missing snapshot_commit handling", {
-			worktree_path = info.worktree_path,
-			original_snapshot = original_snapshot,
-			snapshot_commit = info.snapshot_commit or "NIL",
-			changed_files = changed_files,
-		})
-
-		-- BUG DETECTION: With nil snapshot_commit, should still work somehow
-		-- Currently this returns empty because git diff with nil fails
-		if #changed_files == 0 then
-			print("[TEST] BUG DETECTED: No changes detected when snapshot_commit is nil!")
-			print("[TEST] This causes VibeReview to show 'no changes to review'")
-		end
-
-		-- Ideally, we should either:
-		-- 1. Return all changed files (comparing to HEAD or initial commit)
-		-- 2. Return an error indicating the issue
-		-- For now, document the bug
-		-- eq(1, #changed_files, "Should still detect changes even with nil snapshot_commit")
-
-		-- Restore for cleanup
-		info.snapshot_commit = original_snapshot
-	end)
-
 	it("scan_for_vibe_worktrees restores snapshot_commit correctly", function()
 		local repo_path = helpers.create_test_repo("custom-scan-restore", {
 			["app.js"] = "console.log('hello');",

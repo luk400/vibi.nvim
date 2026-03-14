@@ -9,6 +9,40 @@ local persist = require("vibe.persist")
 
 local M = {}
 
+--- Smart toggle: context-sensitive behavior for :Vibe and <leader>v
+---@param session_name_arg string|nil Explicit session name from :Vibe command
+local function smart_vibe(session_name_arg)
+	if session_name_arg and session_name_arg ~= "" then
+		terminal.toggle(session_name_arg)
+		return
+	end
+
+	local session_count = vim.tbl_count(terminal.sessions)
+	if session_count == 0 then
+		-- No sessions: show directory picker
+		session.pick_directory(function(cwd)
+			local name = vim.fn.fnamemodify(cwd, ":t")
+			if name == "" then
+				name = "root"
+			end
+			local base_name = name
+			local counter = 1
+			while terminal.sessions[name] do
+				name = base_name .. "_" .. counter
+				counter = counter + 1
+			end
+			terminal.toggle(name, cwd)
+		end)
+	elseif session_count == 1 then
+		-- Single session: toggle it directly
+		local single_name = next(terminal.sessions)
+		terminal.toggle(single_name)
+	else
+		-- Multiple sessions: show list
+		session.show_list()
+	end
+end
+
 ---@param opts VibeConfig|nil
 function M.setup(opts)
 	config.setup(opts)
@@ -33,23 +67,7 @@ function M.setup(opts)
 
 	-- Create :Vibe command
 	vim.api.nvim_create_user_command("Vibe", function(args)
-		if args.args ~= "" then
-			terminal.toggle(args.args)
-		else
-			session.pick_directory(function(cwd)
-				local name = vim.fn.fnamemodify(cwd, ":t")
-				if name == "" then
-					name = "root"
-				end
-				local base_name = name
-				local counter = 1
-				while terminal.sessions[name] do
-					name = base_name .. "_" .. counter
-					counter = counter + 1
-				end
-				terminal.toggle(name, cwd)
-			end)
-		end
+		smart_vibe(args.args)
 	end, {
 		nargs = "?",
 		desc = "Toggle Vibe floating terminal",
@@ -94,23 +112,117 @@ function M.setup(opts)
 		desc = "Resume a previous Vibe session",
 	})
 
+	-- Create :VibeStatus command
+	vim.api.nvim_create_user_command("VibeStatus", function()
+		local sessions_list = session.list()
+		if #sessions_list == 0 then
+			vim.notify("[Vibe] No active sessions", vim.log.levels.INFO)
+			return
+		end
+		local parts = {}
+		for _, s in ipairs(sessions_list) do
+			local state = s.is_active and "active" or (s.is_alive and "idle" or "dead")
+			table.insert(parts, s.name .. " (" .. state .. ")")
+		end
+		vim.notify("[Vibe] " .. #sessions_list .. " session(s): " .. table.concat(parts, ", "), vim.log.levels.INFO)
+	end, {
+		desc = "Show Vibe session status summary",
+	})
+
+	-- Create :VibeDiff command
+	vim.api.nvim_create_user_command("VibeDiff", function()
+		diff.show_for_current_file()
+	end, {
+		desc = "Show inline diff for current file",
+	})
+
+	-- Create :VibeRename command
+	vim.api.nvim_create_user_command("VibeRename", function(args)
+		local parts_split = vim.split(args.args, "%s+")
+		if #parts_split < 2 then
+			vim.notify("[Vibe] Usage: :VibeRename old_name new_name", vim.log.levels.ERROR)
+			return
+		end
+		local old_name = parts_split[1]
+		local new_name = parts_split[2]
+		if not terminal.sessions[old_name] then
+			vim.notify("[Vibe] Session '" .. old_name .. "' not found", vim.log.levels.ERROR)
+			return
+		end
+		if terminal.sessions[new_name] then
+			vim.notify("[Vibe] Session '" .. new_name .. "' already exists", vim.log.levels.ERROR)
+			return
+		end
+		local sess = terminal.sessions[old_name]
+		terminal.sessions[new_name] = sess
+		terminal.sessions[old_name] = nil
+		sess.name = new_name
+		if terminal.current_session == old_name then
+			terminal.current_session = new_name
+		end
+		if sess.worktree_path and git.worktrees[sess.worktree_path] then
+			git.worktrees[sess.worktree_path].name = new_name
+		end
+		vim.notify("[Vibe] Renamed '" .. old_name .. "' -> '" .. new_name .. "'", vim.log.levels.INFO)
+	end, {
+		nargs = "+",
+		desc = "Rename a Vibe session",
+		complete = function(_, _, _)
+			return vim.tbl_keys(terminal.sessions)
+		end,
+	})
+
+	-- Create :VibeLog command
+	vim.api.nvim_create_user_command("VibeLog", function(args)
+		local log_dir = vim.fn.stdpath("data") .. "/vibe-logs"
+		if vim.fn.isdirectory(log_dir) ~= 1 then
+			vim.notify("[Vibe] No logs found", vim.log.levels.INFO)
+			return
+		end
+		local pattern = args.args ~= "" and (args.args:gsub("[^%w_-]", "_") .. "_*.log") or "*.log"
+		local files = vim.fn.glob(log_dir .. "/" .. pattern, false, true)
+		if #files == 0 then
+			vim.notify("[Vibe] No logs found" .. (args.args ~= "" and (" for '" .. args.args .. "'") or ""), vim.log.levels.INFO)
+			return
+		end
+		table.sort(files)
+		vim.cmd("edit " .. vim.fn.fnameescape(files[#files]))
+	end, {
+		nargs = "?",
+		desc = "View terminal log for a session",
+		complete = function(_, _, _)
+			return vim.tbl_keys(terminal.sessions)
+		end,
+	})
+
+	-- Create :VibeHistory command
+	vim.api.nvim_create_user_command("VibeHistory", function()
+		require("vibe.history").show()
+	end, {
+		desc = "Show Vibe session history",
+	})
+
+	-- Create :VibeHelp command
+	vim.api.nvim_create_user_command("VibeHelp", function()
+		require("vibe.help").show()
+	end, {
+		desc = "Show context-sensitive Vibe help",
+	})
+
 	-- Set up keybinding
 	if config.options.keymap then
 		vim.keymap.set("n", config.options.keymap, function()
-			session.pick_directory(function(cwd)
-				local name = vim.fn.fnamemodify(cwd, ":t")
-				if name == "" then
-					name = "root"
-				end
-				local base_name = name
-				local counter = 1
-				while terminal.sessions[name] do
-					name = base_name .. "_" .. counter
-					counter = counter + 1
-				end
-				terminal.toggle(name, cwd)
-			end)
+			smart_vibe()
 		end, { silent = true, desc = "Toggle Vibe terminal" })
+	end
+
+	-- which-key integration
+	local wk_ok, wk = pcall(require, "which-key")
+	if wk_ok then
+		pcall(wk.add, {
+			{ "<leader>d", group = "Vibe Diff" },
+			{ "<leader>v", desc = "Vibe Terminal" },
+		})
 	end
 end
 
@@ -122,26 +234,24 @@ function M.setup_quit_protection()
 
 	local group = vim.api.nvim_create_augroup("VibeQuitProtection", { clear = true })
 
-	vim.api.nvim_create_autocmd("CmdlineLeave", {
+	vim.api.nvim_create_autocmd("QuitPre", {
 		group = group,
-		callback = function(args)
-			local cmd = vim.v.event.cmdline or ""
-			if cmd:match("^[qwx]a?%s*$") or cmd:match("^%s*q%s*$") or cmd:match("^%s*q!%s*$") then
-				if git.has_worktrees_with_changes() then
-					local worktrees = git.get_worktrees_with_changes()
-					local total_files = 0
-					for _, info in ipairs(worktrees) do
-						total_files = total_files + #git.get_unresolved_files(info.worktree_path)
-					end
-					if total_files > 0 then
-						vim.notify(
-							"[Vibe] Warning: " .. total_files .. " file(s) with unresolved AI changes will be lost!",
-							vim.log.levels.WARN
-						)
-					end
+		callback = function()
+			if git.has_worktrees_with_changes() then
+				local worktrees = git.get_worktrees_with_changes()
+				local total_files = 0
+				for _, info in ipairs(worktrees) do
+					total_files = total_files + #git.get_unresolved_files(info.worktree_path)
+				end
+				if total_files > 0 then
+					vim.notify(
+						"[Vibe] Warning: " .. total_files .. " file(s) with unresolved AI changes!",
+						vim.log.levels.WARN
+					)
 					vim.schedule(function()
 						session.show_review_list()
 					end)
+					vim.cmd("throw 'Vibe: unresolved changes'")
 				end
 			end
 		end,
@@ -184,9 +294,9 @@ function M.setup_quit_protection()
 					vim.schedule(function()
 						session.show_review_list()
 					end)
-					return false
+					vim.cmd("throw 'Vibe: quit cancelled'")
 				elseif (has_unresolved and choice == 4) or (not has_unresolved and choice == 3) then
-					return false
+					vim.cmd("throw 'Vibe: quit cancelled'")
 				end
 			end
 		end,
@@ -246,6 +356,22 @@ function M.has_unresolved_changes()
 end
 function M.review()
 	session.show_review_list()
+end
+
+--- Lualine-compatible statusline component
+---@return string
+function M.statusline()
+	local total = vim.tbl_count(terminal.sessions)
+	if total == 0 then
+		return ""
+	end
+	local active = 0
+	for name, _ in pairs(terminal.sessions) do
+		if status.is_recently_active(name) then
+			active = active + 1
+		end
+	end
+	return string.format("Vibe(%d/%d)", active, total)
 end
 
 return M

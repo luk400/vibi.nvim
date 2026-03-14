@@ -23,9 +23,9 @@ M.current_hunk_idx = nil
 function M.setup_highlights()
 	vim.api.nvim_set_hl(0, "VibeConflictBorder", { link = "FloatBorder", default = true })
 	vim.api.nvim_set_hl(0, "VibeConflictTitle", { link = "ErrorMsg", default = true })
-	vim.api.nvim_set_hl(0, "VibeConflictUserAdd", { fg = "#00CED1", default = true })
-	vim.api.nvim_set_hl(0, "VibeConflictAIAdd", { fg = "#22C55E", default = true })
-	vim.api.nvim_set_hl(0, "VibeConflictAIDel", { fg = "#F44747", default = true })
+	vim.api.nvim_set_hl(0, "VibeConflictUserAdd", { link = "DiagnosticInfo", default = true })
+	vim.api.nvim_set_hl(0, "VibeConflictAIAdd", { link = "DiffAdd", default = true })
+	vim.api.nvim_set_hl(0, "VibeConflictAIDel", { link = "DiagnosticError", default = true })
 	vim.api.nvim_set_hl(0, "VibeConflictSection", { link = "Title", default = true })
 end
 
@@ -158,8 +158,8 @@ function M.show(bufnr, hunk, hunk_idx)
 
 	local lines, highlights = build_popup_content(hunk)
 	M.popup_bufnr = vim.api.nvim_create_buf(false, true)
-	vim.api.nvim_buf_set_option(M.popup_bufnr, "bufhidden", "wipe")
-	vim.api.nvim_buf_set_option(M.popup_bufnr, "filetype", "vibe-conflict")
+	vim.bo[M.popup_bufnr].bufhidden = "wipe"
+	vim.bo[M.popup_bufnr].filetype = "vibe-conflict"
 	vim.api.nvim_buf_set_lines(M.popup_bufnr, 0, -1, false, lines)
 
 	for _, hl in ipairs(highlights) do
@@ -183,8 +183,8 @@ function M.show(bufnr, hunk, hunk_idx)
 		zindex = 100,
 	})
 
-	vim.api.nvim_win_set_option(M.popup_winnr, "winhl", "FloatBorder:VibeConflictBorder")
-	vim.api.nvim_win_set_option(M.popup_winnr, "cursorline", true)
+	vim.wo[M.popup_winnr].winhl = "FloatBorder:VibeConflictBorder"
+	vim.wo[M.popup_winnr].cursorline = true
 
 	M.setup_keymaps()
 end
@@ -257,7 +257,7 @@ function M.setup_keymaps()
 		return
 	end
 	local keymaps = config.options.diff.conflict_popup.keymaps
-	local opts = { buffer = M.popup_bufnr, silent = true, noremap = true }
+	local opts = { buffer = M.popup_bufnr, silent = true, noremap = true, nowait = true }
 
 	vim.keymap.set("n", keymaps.accept_user, M.accept_user, vim.tbl_extend("force", opts, { desc = "Accept user" }))
 	vim.keymap.set("n", keymaps.accept_ai, M.accept_ai, vim.tbl_extend("force", opts, { desc = "Accept AI" }))

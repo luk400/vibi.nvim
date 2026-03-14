@@ -87,12 +87,14 @@ function M.check_terminal_activity()
 	end
 
 	-- Check if AI has completed (was active, now inactive for completion_timeout)
+	local auto_review = config.options.auto_review or {}
+	local timeout = auto_review.timeout or M.completion_timeout
 	if M.was_active and not any_active and M.last_active_time then
 		local time_since_active = vim.loop.now() - M.last_active_time
-		if time_since_active >= M.completion_timeout and not M.completion_triggered then
+		if time_since_active >= timeout and not M.completion_triggered then
 			-- AI is done! Check if there are changed files and show dialog
 			M.completion_triggered = true
-			if next(git.worktrees) ~= nil then
+			if auto_review.enabled ~= false and next(git.worktrees) ~= nil then
 				local files = git.get_changed_files()
 				if #files > 0 then
 					vim.defer_fn(function()
@@ -115,7 +117,7 @@ local function get_status_text()
 	for name, session in pairs(terminal.sessions) do
 		local is_current = name == terminal.current_session
 		local is_open = session.winid and vim.api.nvim_win_is_valid(session.winid)
-		local is_alive = vim.fn.jobpid(session.job_id) > 0
+		local is_alive = pcall(vim.fn.jobpid, session.job_id)
 		local is_active = M.is_recently_active(name)
 
 		local status_parts = {}
@@ -190,6 +192,12 @@ function M.create_status_window()
 
 	M.refresh_status_window()
 	M.start_timer()
+
+	vim.api.nvim_create_autocmd("VimResized", {
+		callback = function()
+			M.refresh_status_window()
+		end,
+	})
 end
 
 --- Refresh the status window content

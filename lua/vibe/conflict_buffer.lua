@@ -2,6 +2,7 @@
 local git = require("vibe.git")
 local config = require("vibe.config")
 local util = require("vibe.util")
+local resolve = require("vibe.resolve")
 
 local M = {}
 
@@ -99,7 +100,8 @@ function M.insert_conflict_markers(user_lines, worktree_path, filepath, session_
 	vim.fn.writefile(agent_lines, t_agent)
 
 	local cmd = string.format(
-		"git merge-file -p -q -L HEAD -L Base -L vibe-%s %s %s %s",
+		"cd %s && git merge-file -p -q -L HEAD -L Base -L vibe-%s %s %s %s",
+		vim.fn.shellescape(worktree_path),
 		vim.fn.shellescape(session_name),
 		vim.fn.shellescape(t_local),
 		vim.fn.shellescape(t_base),
@@ -293,7 +295,7 @@ function M.show_file_with_conflicts(worktree_path, filepath, _, review_mode)
 
 	if #conflicts > 0 then
 		vim.api.nvim_win_set_cursor(0, { conflicts[1].start_line + 1, 0 })
-		local keymaps = config.options.conflict_buffer and config.options.conflict_buffer.keymaps or {}
+		local keymaps = config.options.diff.conflict_buffer and config.options.diff.conflict_buffer.keymaps or {}
 		vim.notify(
 			string.format(
 				"[Vibe] %d conflict(s). [%s] yours, [%s] AI's, [%s] both, [%s] none",
@@ -407,31 +409,14 @@ function M.resolve_conflict(resolution)
 		end
 	end
 
-	local replacement_lines = {}
-	if resolution == "ours" then
-		replacement_lines = ours_lines
-	elseif resolution == "theirs" then
-		replacement_lines = theirs_lines
-	elseif resolution == "both" then
-		for _, line in ipairs(ours_lines) do
-			table.insert(replacement_lines, line)
-		end
-		for _, line in ipairs(theirs_lines) do
-			table.insert(replacement_lines, line)
-		end
-	end
+	local replacement_lines = resolve.get_replacement_lines(resolution, ours_lines, theirs_lines)
 
 	vim.api.nvim_buf_set_lines(bufnr, conflict.start_line, conflict.end_line + 1, false, replacement_lines)
 
 	state.conflicts[idx].resolved = true
 	state.resolved_count = state.resolved_count + 1
 
-	local action = resolution
-	if resolution == "ours" then
-		action = "rejected"
-	elseif resolution == "theirs" then
-		action = "accepted"
-	end
+	local action = resolve.resolution_to_action(resolution)
 	if conflict.hunk then
 		git.mark_hunk_addressed(state.worktree_path, state.filepath, conflict.hunk, action)
 	end
@@ -627,7 +612,7 @@ function M.finalize_file()
 	M.buffer_state[bufnr] = nil
 	vim.api.nvim_buf_clear_namespace(bufnr, M.ns, 0, -1)
 
-	local conf = config.options.conflict_buffer or {}
+	local conf = config.options.diff.conflict_buffer or {}
 	if conf.auto_next_file ~= false then
 		util.check_remaining_files(state.worktree_path)
 	else
@@ -658,7 +643,17 @@ function M.quit()
 end
 
 function M.setup_keymaps(bufnr)
-	local keymaps = config.options.conflict_buffer and config.options.conflict_buffer.keymaps or {}
+	-- Set up cleanup autocmd for buffer state
+	local group = vim.api.nvim_create_augroup("Vibe_conflict_" .. bufnr, { clear = true })
+	vim.api.nvim_create_autocmd("BufWipeout", {
+		group = group,
+		buffer = bufnr,
+		callback = function()
+			M.buffer_state[bufnr] = nil
+		end,
+	})
+
+	local keymaps = config.options.diff.conflict_buffer and config.options.diff.conflict_buffer.keymaps or {}
 	local opts = { buffer = bufnr, silent = true, noremap = true }
 
 	if keymaps.keep_ours then

@@ -5,6 +5,54 @@ local persist = require("vibe.persist")
 
 local M = {}
 
+--- Dump terminal scrollback to a log file
+---@param session_bufnr integer
+---@param session_name string
+local function dump_scrollback_log(session_bufnr, session_name)
+	local log_config = config.options.log or {}
+	if log_config.enabled == false then
+		return
+	end
+	if not session_bufnr or not vim.api.nvim_buf_is_valid(session_bufnr) then
+		return
+	end
+
+	local log_dir = vim.fn.stdpath("data") .. "/vibe-logs"
+	vim.fn.mkdir(log_dir, "p")
+
+	local ok, lines = pcall(vim.api.nvim_buf_get_lines, session_bufnr, 0, -1, false)
+	if not ok or #lines == 0 then
+		return
+	end
+
+	-- Cleanup: enforce max_files and max_size
+	local max_files = log_config.max_files or 20
+	local max_size_bytes = (log_config.max_size_mb or 50) * 1024 * 1024
+	local existing = vim.fn.glob(log_dir .. "/*.log", false, true)
+	table.sort(existing)
+
+	-- Delete oldest files if over limit
+	while #existing >= max_files do
+		vim.fn.delete(existing[1])
+		table.remove(existing, 1)
+	end
+
+	-- Check total size
+	local total_size = 0
+	for _, f in ipairs(existing) do
+		total_size = total_size + vim.fn.getfsize(f)
+	end
+	while total_size > max_size_bytes and #existing > 0 do
+		total_size = total_size - vim.fn.getfsize(existing[1])
+		vim.fn.delete(existing[1])
+		table.remove(existing, 1)
+	end
+
+	local safe_name = session_name:gsub("[^%w_-]", "_")
+	local filename = string.format("%s/%s_%d.log", log_dir, safe_name, os.time())
+	vim.fn.writefile(lines, filename)
+end
+
 ---@class TerminalSession
 ---@field bufnr integer
 ---@field job_id integer
@@ -56,6 +104,7 @@ function M.get_or_create(name, cwd)
 
 	cwd = cwd or vim.fn.getcwd()
 
+	vim.notify("[Vibe] Creating worktree for '" .. name .. "'...", vim.log.levels.INFO)
 	local worktree_info, err = git.create_worktree(name, cwd)
 	if not worktree_info then
 		vim.notify("[Vibe] Failed to create worktree: " .. (err or "unknown error"), vim.log.levels.ERROR)
@@ -74,6 +123,7 @@ function M.get_or_create(name, cwd)
 		job_id = vim.fn.termopen(config.options.command, {
 			cwd = worktree_info.worktree_path,
 			on_exit = function(_, exit_code)
+				dump_scrollback_log(bufnr, name)
 				if exit_code ~= 0 then
 					vim.notify(string.format("[Vibe] Command exited with code %d", exit_code), vim.log.levels.WARN)
 				end
@@ -133,7 +183,7 @@ function M.show(name, cwd)
 
 	save_buffers()
 	local window = require("vibe.window")
-	session.winid = window.create(session.bufnr)
+	session.winid = window.create(session.bufnr, name)
 	vim.cmd("startinsert")
 	M.current_session = name
 end
@@ -189,6 +239,20 @@ function M.kill(name)
 			vim.api.nvim_buf_delete(session.bufnr, { force = true })
 		end
 		if session.worktree_path then
+			-- Record history before removing worktree
+			local history_ok, history = pcall(require, "vibe.history")
+			if history_ok then
+				local files = {}
+				pcall(function()
+					files = git.get_worktree_changed_files(session.worktree_path)
+				end)
+				history.record({
+					name = name,
+					worktree_path = session.worktree_path,
+					repo_root = session.cwd,
+					files_changed = #files,
+				})
+			end
 			git.remove_worktree(session.worktree_path)
 		end
 
@@ -230,6 +294,8 @@ function M.resume(persisted_session)
 			repo_root = persisted_session.repo_root,
 			uuid = persisted_session.worktree_path:match("([^/]+)$"),
 			created_at = persisted_session.created_at,
+			addressed_hunks = persisted_session.addressed_hunks or {},
+			manually_modified_files = persisted_session.manually_modified_files or {},
 		}
 	end
 
@@ -245,6 +311,7 @@ function M.resume(persisted_session)
 		job_id = vim.fn.termopen(config.options.command, {
 			cwd = persisted_session.worktree_path,
 			on_exit = function(_, exit_code)
+				dump_scrollback_log(bufnr, name)
 				if exit_code ~= 0 then
 					vim.notify(string.format("[Vibe] Command exited with code %d", exit_code), vim.log.levels.WARN)
 				end

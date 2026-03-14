@@ -6,6 +6,15 @@ local util = require("vibe.util")
 
 local M = {}
 
+-- Named constants for list layout calculations
+local LIST_HEADER_LINES = 2 -- Title + separator line
+local LIST_LINES_PER_SESSION = 2 -- Name line + detail line
+local RESUME_LINES_PER_SESSION = 3 -- Name line + created line + path line
+local KILL_HEADER_LINES = 2 -- Title + separator
+local KILL_LINES_PER_SESSION = 1 -- Single line per session
+local BROWSE_HEADER_LINES = 4 -- Title + separator + path + separator
+local BROWSE_LINES_PER_DIR = 1 -- One line per directory
+
 function M.list()
 	local sessions = {}
 	for name, session in pairs(terminal.sessions) do
@@ -13,7 +22,7 @@ function M.list()
 			name = name,
 			is_current = name == terminal.current_session,
 			is_open = session.winid and vim.api.nvim_win_is_valid(session.winid) or false,
-			is_alive = session.job_id and vim.fn.jobpid(session.job_id) > 0 or false,
+			is_alive = session.job_id and (pcall(vim.fn.jobpid, session.job_id)) or false,
 			is_active = status.is_recently_active(name),
 			job_id = session.job_id,
 			bufnr = session.bufnr,
@@ -66,13 +75,14 @@ function M.show_list()
 
 	local bufnr, winid, close = util.create_centered_float({ lines = lines, filetype = "vibelist", min_width = 40 })
 
+	local first_session_line = LIST_HEADER_LINES + 1
 	if #sessions > 0 then
-		vim.api.nvim_win_set_cursor(winid, { 3, 2 })
+		vim.api.nvim_win_set_cursor(winid, { first_session_line, 2 })
 	end
 	vim.api.nvim_buf_add_highlight(bufnr, -1, "Title", 0, 0, -1)
 
 	for i, session in ipairs(sessions) do
-		local line_num = 2 + (i - 1) * 2 + 1
+		local line_num = LIST_HEADER_LINES + (i - 1) * LIST_LINES_PER_SESSION + 1
 		if session.is_active then
 			vim.api.nvim_buf_add_highlight(bufnr, -1, "VibeActive", line_num - 1, 0, 5)
 		end
@@ -80,10 +90,10 @@ function M.show_list()
 
 	local function get_session_at_cursor()
 		local cursor_line = vim.api.nvim_win_get_cursor(winid)[1]
-		if cursor_line < 3 then
+		if cursor_line < first_session_line then
 			return nil, nil
 		end
-		local session_idx = math.floor((cursor_line - 3) / 2) + 1
+		local session_idx = math.floor((cursor_line - first_session_line) / LIST_LINES_PER_SESSION) + 1
 		if session_idx >= 1 and session_idx <= #sessions then
 			return sessions[session_idx], session_idx
 		end
@@ -110,14 +120,28 @@ function M.show_list()
 	vim.keymap.set("n", "j", function()
 		local _, idx = get_session_at_cursor()
 		if idx and idx < #sessions then
-			vim.api.nvim_win_set_cursor(winid, { 3 + idx * 2, 2 })
+			vim.api.nvim_win_set_cursor(winid, { first_session_line + idx * LIST_LINES_PER_SESSION, 2 })
+		end
+	end, { buffer = bufnr, silent = true })
+
+	vim.keymap.set("n", "<Down>", function()
+		local _, idx = get_session_at_cursor()
+		if idx and idx < #sessions then
+			vim.api.nvim_win_set_cursor(winid, { first_session_line + idx * LIST_LINES_PER_SESSION, 2 })
 		end
 	end, { buffer = bufnr, silent = true })
 
 	vim.keymap.set("n", "k", function()
 		local _, idx = get_session_at_cursor()
 		if idx and idx > 1 then
-			vim.api.nvim_win_set_cursor(winid, { 3 + (idx - 2) * 2, 2 })
+			vim.api.nvim_win_set_cursor(winid, { first_session_line + (idx - 2) * LIST_LINES_PER_SESSION, 2 })
+		end
+	end, { buffer = bufnr, silent = true })
+
+	vim.keymap.set("n", "<Up>", function()
+		local _, idx = get_session_at_cursor()
+		if idx and idx > 1 then
+			vim.api.nvim_win_set_cursor(winid, { first_session_line + (idx - 2) * LIST_LINES_PER_SESSION, 2 })
 		end
 	end, { buffer = bufnr, silent = true })
 end
@@ -139,12 +163,13 @@ function M.show_kill_list()
 
 	local bufnr, winid, close = util.create_centered_float({ lines = lines, filetype = "vibekill", min_width = 40 })
 
-	vim.api.nvim_win_set_cursor(winid, { 3, 2 })
+	local kill_first_line = KILL_HEADER_LINES + 1
+	vim.api.nvim_win_set_cursor(winid, { kill_first_line, 2 })
 	vim.api.nvim_buf_add_highlight(bufnr, -1, "Title", 0, 0, -1)
 
 	local function get_session_at_cursor()
 		local cursor_line = vim.api.nvim_win_get_cursor(winid)[1]
-		local session_idx = cursor_line - 2
+		local session_idx = cursor_line - KILL_HEADER_LINES
 		if session_idx >= 1 and session_idx <= #sessions then
 			return sessions[session_idx], session_idx
 		end
@@ -162,14 +187,28 @@ function M.show_kill_list()
 	vim.keymap.set("n", "j", function()
 		local _, idx = get_session_at_cursor()
 		if idx and idx < #sessions then
-			vim.api.nvim_win_set_cursor(winid, { idx + 2 + 1, 2 })
+			vim.api.nvim_win_set_cursor(winid, { KILL_HEADER_LINES + idx + 1, 2 })
+		end
+	end, { buffer = bufnr, silent = true })
+
+	vim.keymap.set("n", "<Down>", function()
+		local _, idx = get_session_at_cursor()
+		if idx and idx < #sessions then
+			vim.api.nvim_win_set_cursor(winid, { KILL_HEADER_LINES + idx + 1, 2 })
 		end
 	end, { buffer = bufnr, silent = true })
 
 	vim.keymap.set("n", "k", function()
 		local _, idx = get_session_at_cursor()
 		if idx and idx > 1 then
-			vim.api.nvim_win_set_cursor(winid, { idx + 2 - 1, 2 })
+			vim.api.nvim_win_set_cursor(winid, { KILL_HEADER_LINES + idx - 1, 2 })
+		end
+	end, { buffer = bufnr, silent = true })
+
+	vim.keymap.set("n", "<Up>", function()
+		local _, idx = get_session_at_cursor()
+		if idx and idx > 1 then
+			vim.api.nvim_win_set_cursor(winid, { KILL_HEADER_LINES + idx - 1, 2 })
 		end
 	end, { buffer = bufnr, silent = true })
 end
@@ -210,15 +249,16 @@ function M.show_review_list()
 		cursorline = true,
 	})
 
-	vim.api.nvim_win_set_cursor(winid, { 3, 2 })
+	local review_first_line = LIST_HEADER_LINES + 1
+	vim.api.nvim_win_set_cursor(winid, { review_first_line, 2 })
 	vim.api.nvim_buf_add_highlight(bufnr, -1, "Title", 0, 0, -1)
 
 	local function get_worktree_at_cursor()
 		local cursor_line = vim.api.nvim_win_get_cursor(winid)[1]
-		if cursor_line < 3 then
+		if cursor_line < review_first_line then
 			return nil, nil
 		end
-		local idx = math.floor((cursor_line - 3) / 2) + 1
+		local idx = math.floor((cursor_line - review_first_line) / LIST_LINES_PER_SESSION) + 1
 		if idx >= 1 and idx <= #worktrees then
 			return worktrees[idx], idx
 		end
@@ -236,18 +276,62 @@ function M.show_review_list()
 			end
 			close()
 
-			-- Prompt for Review Mode
-			vim.ui.select({
-				"1. Auto-Merge (Apply safe changes, only review conflicts)",
-				"2. Manual Review (Review all changes manually)",
-			}, { prompt = "Select Review Mode:" }, function(choice)
-				if not choice then
-					M.show_review_list()
-					return
-				end
-				local mode = choice:match("^1") and "auto" or "manual"
+			-- Show review mode picker as float
+			local mode_lines = {
+				" Select Review Mode",
+				" " .. string.rep("─", 50),
+				" 1. Auto-Merge (Apply safe changes, only review conflicts)",
+				" 2. Manual Review (Review all changes manually)",
+				"",
+				" <CR> select  q cancel",
+			}
+			local mode_bufnr, mode_winid, mode_close = util.create_centered_float({
+				lines = mode_lines,
+				filetype = "vibe_mode_select",
+				min_width = 60,
+				no_default_keymaps = true,
+			})
+			vim.api.nvim_win_set_cursor(mode_winid, { 3, 2 })
+			vim.api.nvim_buf_add_highlight(mode_bufnr, -1, "Title", 0, 0, -1)
+			vim.wo[mode_winid].cursorline = true
+
+			local function mode_select()
+				local cursor = vim.api.nvim_win_get_cursor(mode_winid)[1]
+				local mode = (cursor == 3) and "auto" or "manual"
+				mode_close()
 				require("vibe.dialog").show(info.worktree_path, info, mode)
-			end)
+			end
+			local function mode_cancel()
+				mode_close()
+				M.show_review_list()
+			end
+			vim.keymap.set("n", "<CR>", mode_select, { buffer = mode_bufnr, silent = true })
+			vim.keymap.set("n", "q", mode_cancel, { buffer = mode_bufnr, silent = true })
+			vim.keymap.set("n", "<Esc>", mode_cancel, { buffer = mode_bufnr, silent = true })
+			vim.keymap.set("n", "j", function()
+				local cursor = vim.api.nvim_win_get_cursor(mode_winid)[1]
+				if cursor == 3 then
+					vim.api.nvim_win_set_cursor(mode_winid, { 4, 2 })
+				end
+			end, { buffer = mode_bufnr, silent = true })
+			vim.keymap.set("n", "<Down>", function()
+				local cursor = vim.api.nvim_win_get_cursor(mode_winid)[1]
+				if cursor == 3 then
+					vim.api.nvim_win_set_cursor(mode_winid, { 4, 2 })
+				end
+			end, { buffer = mode_bufnr, silent = true })
+			vim.keymap.set("n", "k", function()
+				local cursor = vim.api.nvim_win_get_cursor(mode_winid)[1]
+				if cursor == 4 then
+					vim.api.nvim_win_set_cursor(mode_winid, { 3, 2 })
+				end
+			end, { buffer = mode_bufnr, silent = true })
+			vim.keymap.set("n", "<Up>", function()
+				local cursor = vim.api.nvim_win_get_cursor(mode_winid)[1]
+				if cursor == 4 then
+					vim.api.nvim_win_set_cursor(mode_winid, { 3, 2 })
+				end
+			end, { buffer = mode_bufnr, silent = true })
 		end
 	end, { buffer = bufnr, silent = true })
 
@@ -263,14 +347,28 @@ function M.show_review_list()
 	vim.keymap.set("n", "j", function()
 		local _, idx = get_worktree_at_cursor()
 		if idx and idx < #worktrees then
-			vim.api.nvim_win_set_cursor(winid, { 3 + idx * 2, 2 })
+			vim.api.nvim_win_set_cursor(winid, { review_first_line + idx * LIST_LINES_PER_SESSION, 2 })
+		end
+	end, { buffer = bufnr, silent = true })
+
+	vim.keymap.set("n", "<Down>", function()
+		local _, idx = get_worktree_at_cursor()
+		if idx and idx < #worktrees then
+			vim.api.nvim_win_set_cursor(winid, { review_first_line + idx * LIST_LINES_PER_SESSION, 2 })
 		end
 	end, { buffer = bufnr, silent = true })
 
 	vim.keymap.set("n", "k", function()
 		local _, idx = get_worktree_at_cursor()
 		if idx and idx > 1 then
-			vim.api.nvim_win_set_cursor(winid, { 3 + (idx - 2) * 2, 2 })
+			vim.api.nvim_win_set_cursor(winid, { review_first_line + (idx - 2) * LIST_LINES_PER_SESSION, 2 })
+		end
+	end, { buffer = bufnr, silent = true })
+
+	vim.keymap.set("n", "<Up>", function()
+		local _, idx = get_worktree_at_cursor()
+		if idx and idx > 1 then
+			vim.api.nvim_win_set_cursor(winid, { review_first_line + (idx - 2) * LIST_LINES_PER_SESSION, 2 })
 		end
 	end, { buffer = bufnr, silent = true })
 end
@@ -343,7 +441,7 @@ function M.pick_directory(callback)
 		end
 	end, { buffer = bufnr, silent = true })
 
-	vim.keymap.set("n", "j", function()
+	local function move_next()
 		local idx = get_option_index()
 		if idx and idx < #options then
 			local target_line = 3
@@ -352,9 +450,9 @@ function M.pick_directory(callback)
 			end
 			vim.api.nvim_win_set_cursor(winid, { target_line, 2 })
 		end
-	end, { buffer = bufnr, silent = true })
+	end
 
-	vim.keymap.set("n", "k", function()
+	local function move_prev()
 		local idx = get_option_index()
 		if idx and idx > 1 then
 			local target_line = 3
@@ -363,7 +461,12 @@ function M.pick_directory(callback)
 			end
 			vim.api.nvim_win_set_cursor(winid, { target_line, 2 })
 		end
-	end, { buffer = bufnr, silent = true })
+	end
+
+	vim.keymap.set("n", "j", move_next, { buffer = bufnr, silent = true })
+	vim.keymap.set("n", "<Down>", move_next, { buffer = bufnr, silent = true })
+	vim.keymap.set("n", "k", move_prev, { buffer = bufnr, silent = true })
+	vim.keymap.set("n", "<Up>", move_prev, { buffer = bufnr, silent = true })
 end
 
 function M.browse_directory(callback, start_path)
@@ -389,11 +492,18 @@ function M.browse_directory(callback, start_path)
 			"  " .. string.rep("─", 50),
 		}
 
-		table.insert(dirs, 1, { name = "..", path = vim.fn.fnamemodify(path, ":h") })
+		table.insert(dirs, 1, { name = "..", path = vim.fn.fnamemodify(path, ":h"), is_git = false })
+		for i, dir in ipairs(dirs) do
+			if i > 1 then -- skip ".."
+				dir.is_git = vim.fn.isdirectory(dir.path .. "/.git") == 1
+			end
+		end
 		for _, dir in ipairs(dirs) do
-			table.insert(lines, string.format("  📁 %s", dir.name))
+			local git_indicator = dir.is_git and " [git]" or ""
+			table.insert(lines, string.format("  📁 %s%s", dir.name, git_indicator))
 		end
 		table.insert(lines, "")
+		table.insert(lines, "  (Only directories inside git repositories can be used)")
 		table.insert(lines, "  <CR> enter/select  <Tab> select this dir  q cancel")
 
 		local bufnr, winid, close =
@@ -426,19 +536,26 @@ function M.browse_directory(callback, start_path)
 			close()
 			callback(path)
 		end, { buffer = bufnr, silent = true })
-		vim.keymap.set("n", "j", function()
+		local function browse_move_down()
 			local cursor_line = vim.api.nvim_win_get_cursor(winid)[1]
-			if cursor_line - 5 < #dirs then
+			local first_dir_line = BROWSE_HEADER_LINES + 2
+			if cursor_line - first_dir_line < #dirs - 1 then
 				vim.api.nvim_win_set_cursor(winid, { cursor_line + 1, 2 })
 			end
-		end, { buffer = bufnr, silent = true })
+		end
 
-		vim.keymap.set("n", "k", function()
+		local function browse_move_up()
 			local cursor_line = vim.api.nvim_win_get_cursor(winid)[1]
-			if cursor_line > 6 then
+			local first_dir_line = BROWSE_HEADER_LINES + 2
+			if cursor_line > first_dir_line then
 				vim.api.nvim_win_set_cursor(winid, { cursor_line - 1, 2 })
 			end
-		end, { buffer = bufnr, silent = true })
+		end
+
+		vim.keymap.set("n", "j", browse_move_down, { buffer = bufnr, silent = true })
+		vim.keymap.set("n", "<Down>", browse_move_down, { buffer = bufnr, silent = true })
+		vim.keymap.set("n", "k", browse_move_up, { buffer = bufnr, silent = true })
+		vim.keymap.set("n", "<Up>", browse_move_up, { buffer = bufnr, silent = true })
 
 		vim.keymap.set("n", "h", function()
 			close()
@@ -517,7 +634,7 @@ function M.show_resume_list()
 		end
 		local status_text = s.is_orphaned and "[orphaned]" or "[paused]"
 
-		table.insert(lines, string.format("  %s %s", project_name, status_text))
+		table.insert(lines, string.format("  %s (%s) %s", s.name, project_name, status_text))
 		table.insert(
 			lines,
 			string.format(
@@ -540,17 +657,18 @@ function M.show_resume_list()
 		cursorline = true,
 	})
 
-	vim.api.nvim_win_set_cursor(winid, { 3, 2 })
+	local resume_first_line = LIST_HEADER_LINES + 1
+	vim.api.nvim_win_set_cursor(winid, { resume_first_line, 2 })
 	vim.api.nvim_buf_add_highlight(bufnr, -1, "Title", 0, 0, -1)
 
 	local function get_session_at_cursor()
 		local cursor_line = vim.api.nvim_win_get_cursor(winid)[1]
-		if cursor_line < 3 then
+		if cursor_line < resume_first_line then
 			return nil, nil, nil
 		end
-		local remainder = (cursor_line - 3) % 3
+		local remainder = (cursor_line - resume_first_line) % RESUME_LINES_PER_SESSION
 		local session_line = cursor_line - remainder
-		local idx = (session_line - 3) / 3 + 1
+		local idx = (session_line - resume_first_line) / RESUME_LINES_PER_SESSION + 1
 		if idx >= 1 and idx <= #resumable then
 			return resumable[idx], idx, session_line
 		end
@@ -613,14 +731,28 @@ function M.show_resume_list()
 	vim.keymap.set("n", "j", function()
 		local _, idx = get_session_at_cursor()
 		if idx and idx < #resumable then
-			vim.api.nvim_win_set_cursor(winid, { 3 + idx * 3, 2 })
+			vim.api.nvim_win_set_cursor(winid, { resume_first_line + idx * RESUME_LINES_PER_SESSION, 2 })
+		end
+	end, { buffer = bufnr, silent = true })
+
+	vim.keymap.set("n", "<Down>", function()
+		local _, idx = get_session_at_cursor()
+		if idx and idx < #resumable then
+			vim.api.nvim_win_set_cursor(winid, { resume_first_line + idx * RESUME_LINES_PER_SESSION, 2 })
 		end
 	end, { buffer = bufnr, silent = true })
 
 	vim.keymap.set("n", "k", function()
 		local _, idx = get_session_at_cursor()
 		if idx and idx > 1 then
-			vim.api.nvim_win_set_cursor(winid, { 3 + (idx - 2) * 3, 2 })
+			vim.api.nvim_win_set_cursor(winid, { resume_first_line + (idx - 2) * RESUME_LINES_PER_SESSION, 2 })
+		end
+	end, { buffer = bufnr, silent = true })
+
+	vim.keymap.set("n", "<Up>", function()
+		local _, idx = get_session_at_cursor()
+		if idx and idx > 1 then
+			vim.api.nvim_win_set_cursor(winid, { resume_first_line + (idx - 2) * RESUME_LINES_PER_SESSION, 2 })
 		end
 	end, { buffer = bufnr, silent = true })
 end

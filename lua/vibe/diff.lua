@@ -47,8 +47,51 @@ function M.has_overlap(hunk)
 	return has_user_additions and has_ai_changes
 end
 
+function M.show_split_view(worktree_path, filepath)
+	local info = git.get_worktree_info(worktree_path)
+	if not info then
+		return
+	end
+
+	local user_file_path = info.repo_root .. "/" .. filepath
+	local worktree_file_path = worktree_path .. "/" .. filepath
+
+	if vim.fn.filereadable(worktree_file_path) ~= 1 then
+		vim.notify("[Vibe] Worktree file not found: " .. filepath, vim.log.levels.ERROR)
+		return
+	end
+
+	-- Open user file
+	vim.cmd("edit " .. vim.fn.fnameescape(user_file_path))
+	vim.cmd("diffthis")
+
+	-- Open worktree file in vsplit as read-only scratch
+	vim.cmd("vsplit " .. vim.fn.fnameescape(worktree_file_path))
+	local split_bufnr = vim.api.nvim_get_current_buf()
+	vim.bo[split_bufnr].readonly = true
+	vim.bo[split_bufnr].modifiable = false
+	vim.bo[split_bufnr].buftype = "nofile"
+	vim.cmd("diffthis")
+
+	-- Set up quit keymap to close the split and turn off diff
+	vim.keymap.set("n", "q", function()
+		vim.cmd("diffoff!")
+		vim.cmd("close")
+		if worktree_path then
+			require("vibe.dialog").show(worktree_path)
+		end
+	end, { buffer = split_bufnr, silent = true, desc = "Close split diff" })
+end
+
 function M.show_for_file(worktree_path, filepath, review_mode)
 	review_mode = review_mode or "manual"
+
+	-- Check for split mode
+	if config.options.diff.mode == "split" then
+		M.show_split_view(worktree_path, filepath)
+		return
+	end
+
 	local bufnr = vim.api.nvim_get_current_buf()
 	local user_file_path = vim.api.nvim_buf_get_name(bufnr)
 
@@ -446,7 +489,9 @@ function M.setup_keymaps(bufnr)
 end
 
 function M.setup_conflict_tracking(bufnr)
+	local group = vim.api.nvim_create_augroup("Vibe_diff_" .. bufnr, { clear = true })
 	vim.api.nvim_create_autocmd("CursorMoved", {
+		group = group,
 		buffer = bufnr,
 		callback = function()
 			local hunk, idx = M.get_hunk_at_cursor()
@@ -458,6 +503,7 @@ function M.setup_conflict_tracking(bufnr)
 		end,
 	})
 	vim.api.nvim_create_autocmd("BufLeave", {
+		group = group,
 		buffer = bufnr,
 		callback = function()
 			if conflict_popup.is_visible() then
@@ -465,13 +511,23 @@ function M.setup_conflict_tracking(bufnr)
 			end
 		end,
 	})
+	vim.api.nvim_create_autocmd("BufWipeout", {
+		group = group,
+		buffer = bufnr,
+		callback = function()
+			M.buffer_hunks[bufnr] = nil
+			M.buffer_worktree[bufnr] = nil
+			M.buffer_filepath[bufnr] = nil
+			pcall(vim.api.nvim_del_augroup_by_id, vim.api.nvim_create_augroup("Vibe_diff_" .. bufnr, { clear = true }))
+		end,
+	})
 end
 
 function M.setup()
 	vim.fn.sign_define("VibeDiffHunk", { text = "│", texthl = "WarningMsg" })
 	vim.fn.sign_define("VibeDiffConflict", { text = "!", texthl = "ErrorMsg" })
-	vim.api.nvim_set_hl(0, "VibeUserAddition", { fg = "#00CED1", bold = true, default = true })
-	vim.api.nvim_set_hl(0, "VibeConflictCollapsed", { bg = "#8B0000", fg = "#FFFFFF", bold = true, default = true })
+	vim.api.nvim_set_hl(0, "VibeUserAddition", { link = "DiagnosticInfo", default = true })
+	vim.api.nvim_set_hl(0, "VibeConflictCollapsed", { link = "DiagnosticError", default = true })
 
 	dialog.setup_highlights()
 	conflict_popup.setup()

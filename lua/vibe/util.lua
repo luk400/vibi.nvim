@@ -53,9 +53,14 @@ function M.create_centered_float(opts)
 		end
 	end
 
-	-- Default close keymaps
-	vim.keymap.set("n", "q", close, { buffer = bufnr, silent = true })
-	vim.keymap.set("n", "<Esc>", close, { buffer = bufnr, silent = true })
+	-- Set buffer as non-modifiable
+	vim.bo[bufnr].modifiable = false
+
+	-- Default close keymaps (unless caller wants to override)
+	if not opts.no_default_keymaps then
+		vim.keymap.set("n", "q", close, { buffer = bufnr, silent = true })
+		vim.keymap.set("n", "<Esc>", close, { buffer = bufnr, silent = true })
+	end
 
 	return bufnr, winid, close
 end

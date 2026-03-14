@@ -46,7 +46,7 @@ local function matches_patterns(file, patterns)
 		if vim.fn.match(file, pattern) >= 0 then
 			return true
 		end
-		local glob_as_lua = pattern:gsub("%.", "%%."):gsub("%", "."):gsub("%?", ".")
+		local glob_as_lua = pattern:gsub("%.", "%%."):gsub("%*", ".*"):gsub("%?", ".")
 		if file:match("^" .. glob_as_lua .. "$") or file:match(glob_as_lua) then
 			return true
 		end
@@ -229,14 +229,14 @@ function M.create_worktree(session_name, repo_cwd)
 		end
 	end
 
-	local changed_output = git_cmd({ "diff", "--name-only", "HEAD" }, { cwd = repo_cwd, ignore_error = true })
+	local tracked_output = git_cmd({ "ls-files" }, { cwd = repo_root, ignore_error = true })
 	local untracked_output = git_cmd(
 		{ "ls-files", "--others", "--exclude-standard" },
-		{ cwd = repo_cwd, ignore_error = true }
+		{ cwd = repo_root, ignore_error = true }
 	)
 
 	local files_to_copy = {}
-	for file in (changed_output or ""):gmatch("[^\r\n]+") do
+	for file in (tracked_output or ""):gmatch("[^\r\n]+") do
 		if file ~= "" then
 			files_to_copy[file] = true
 		end
@@ -252,33 +252,6 @@ function M.create_worktree(session_name, repo_cwd)
 			if copy_all_untracked or (#untracked_patterns > 0 and matches_patterns(file, untracked_patterns)) then
 				files_to_copy[file] = true
 			end
-		end
-	end
-
-	-- Filter files to only include those under the selected repo_cwd
-	-- This handles the case where user selected a subdirectory as their working directory
-	if repo_cwd ~= repo_root then
-		-- Calculate relative path from repo_root to repo_cwd
-		local cwd_relative = repo_cwd
-		if vim.startswith(cwd_relative, repo_root .. "/") then
-			cwd_relative = cwd_relative:sub(#repo_root + 2)
-		elseif vim.startswith(cwd_relative, repo_root) then
-			cwd_relative = cwd_relative:sub(#repo_root + 1)
-			if cwd_relative:sub(1, 1) == "/" then
-				cwd_relative = cwd_relative:sub(2)
-			end
-		end
-
-		-- Only keep files that are under the selected directory
-		if cwd_relative ~= "" then
-			local filtered_files = {}
-			local cwd_prefix = cwd_relative:gsub("([^%w])", "%%%1") .. "/"
-			for file, _ in pairs(files_to_copy) do
-				if vim.startswith(file, cwd_relative .. "/") or file == cwd_relative then
-					filtered_files[file] = true
-				end
-			end
-			files_to_copy = filtered_files
 		end
 	end
 
@@ -571,7 +544,10 @@ function M.get_worktree_file_hunks(worktree_path, filepath, user_file_path)
 	vim.fn.writefile(worktree_lines, tmp_worktree)
 	vim.fn.writefile(user_lines, tmp_user)
 
-	local output = git_cmd({ "diff", "-U0", "--no-color", tmp_user, tmp_worktree }, { ignore_error = true })
+	local output = git_cmd(
+		{ "diff", "--no-index", "-U0", "--no-color", tmp_user, tmp_worktree },
+		{ cwd = worktree_path, ignore_error = true }
+	)
 	vim.fn.delete(tmp_worktree)
 	vim.fn.delete(tmp_user)
 	if not output or output == "" then
@@ -733,7 +709,7 @@ function M.get_user_added_lines(worktree_path, filepath, user_file_path)
 	local tmp_snapshot, tmp_user = vim.fn.tempname(), vim.fn.tempname()
 	vim.fn.writefile(snapshot_lines, tmp_snapshot)
 	vim.fn.writefile(user_lines, tmp_user)
-	local output = git_cmd({ "diff", "-U0", "--no-color", tmp_snapshot, tmp_user }, { ignore_error = true })
+	local output = git_cmd({ "diff", "--no-index", "-U0", "--no-color", tmp_snapshot, tmp_user }, { cwd = worktree_path, ignore_error = true })
 	vim.fn.delete(tmp_snapshot)
 	vim.fn.delete(tmp_user)
 
