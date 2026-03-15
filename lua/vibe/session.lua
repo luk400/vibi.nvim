@@ -70,7 +70,7 @@ function M.show_list()
 			table.insert(lines, string.format(" %s", vim.fn.pathshorten(info.cwd)))
 		end
 		table.insert(lines, "")
-		table.insert(lines, " <CR> open d kill q close")
+		table.insert(lines, " <CR> open n new d kill q close")
 	end
 
 	local bufnr, winid, close = util.create_centered_float({ lines = lines, filetype = "vibelist", min_width = 40 })
@@ -115,6 +115,23 @@ function M.show_list()
 			close()
 			M.show_list()
 		end
+	end, { buffer = bufnr, silent = true })
+
+	vim.keymap.set("n", "n", function()
+		close()
+		M.pick_directory(function(cwd)
+			local name = vim.fn.fnamemodify(cwd, ":t")
+			if name == "" then
+				name = "root"
+			end
+			local base_name = name
+			local counter = 1
+			while terminal.sessions[name] do
+				name = base_name .. "_" .. counter
+				counter = counter + 1
+			end
+			terminal.toggle(name, cwd)
+		end)
 	end, { buffer = bufnr, silent = true })
 
 	vim.keymap.set("n", "j", function()

@@ -2,8 +2,13 @@ local config = require("vibe.config")
 local status = require("vibe.status")
 local git = require("vibe.git")
 local persist = require("vibe.persist")
+local loading = require("vibe.loading")
 
 local M = {}
+
+--- Set of session names currently being created (guard against double-creation)
+---@type table<string, boolean>
+M.creating = {}
 
 --- Dump terminal scrollback to a log file
 ---@param session_bufnr integer
@@ -92,25 +97,12 @@ local function reload_buffers()
 	vim.cmd("checktime")
 end
 
----@param name string|nil
----@param cwd string|nil Working directory for the session (user's repo)
+--- Create the terminal buffer and session object from a worktree_info (shared by get_or_create and resume)
+---@param name string
+---@param cwd string
+---@param worktree_info table
 ---@return TerminalSession|nil
-function M.get_or_create(name, cwd)
-	name = name or "default"
-
-	if M.sessions[name] and vim.api.nvim_buf_is_valid(M.sessions[name].bufnr) then
-		return M.sessions[name]
-	end
-
-	cwd = cwd or vim.fn.getcwd()
-
-	vim.notify("[Vibe] Creating worktree for '" .. name .. "'...", vim.log.levels.INFO)
-	local worktree_info, err = git.create_worktree(name, cwd)
-	if not worktree_info then
-		vim.notify("[Vibe] Failed to create worktree: " .. (err or "unknown error"), vim.log.levels.ERROR)
-		return nil
-	end
-
+local function finalize_session(name, cwd, worktree_info)
 	save_buffers()
 
 	local bufnr = vim.api.nvim_create_buf(false, false)
@@ -172,20 +164,71 @@ function M.get_or_create(name, cwd)
 	return session
 end
 
+--- Get or create a session asynchronously
+---@param name string|nil
+---@param cwd string|nil Working directory for the session (user's repo)
+---@param callback function Called with (session) — nil on failure
+function M.get_or_create(name, cwd, callback)
+	name = name or "default"
+
+	if M.sessions[name] and vim.api.nvim_buf_is_valid(M.sessions[name].bufnr) then
+		callback(M.sessions[name])
+		return
+	end
+
+	if M.creating[name] then
+		vim.notify("[Vibe] Already creating session '" .. name .. "'...", vim.log.levels.WARN)
+		return
+	end
+
+	cwd = cwd or vim.fn.getcwd()
+	M.creating[name] = true
+	loading.show(name, function()
+		M.cancel_creation(name)
+	end)
+
+	git.create_worktree_async(name, cwd, function(worktree_info, err)
+		loading.hide()
+		M.creating[name] = nil
+
+		if not worktree_info then
+			vim.notify("[Vibe] Failed to create worktree: " .. (err or "unknown error"), vim.log.levels.ERROR)
+			callback(nil)
+			return
+		end
+
+		local session = finalize_session(name, cwd, worktree_info)
+		callback(session)
+	end)
+end
+
 ---@param name string|nil
 ---@param cwd string|nil Working directory (only used for new sessions)
 function M.show(name, cwd)
 	name = name or "default"
-	local session = M.get_or_create(name, cwd)
-	if not session then
+
+	-- If session already exists, show it immediately
+	local existing = M.sessions[name]
+	if existing and vim.api.nvim_buf_is_valid(existing.bufnr) then
+		save_buffers()
+		local window = require("vibe.window")
+		existing.winid = window.create(existing.bufnr, name)
+		vim.cmd("startinsert")
+		M.current_session = name
 		return
 	end
 
-	save_buffers()
-	local window = require("vibe.window")
-	session.winid = window.create(session.bufnr, name)
-	vim.cmd("startinsert")
-	M.current_session = name
+	-- Otherwise create async and show on completion
+	M.get_or_create(name, cwd, function(session)
+		if not session then
+			return
+		end
+		save_buffers()
+		local window = require("vibe.window")
+		session.winid = window.create(session.bufnr, name)
+		vim.cmd("startinsert")
+		M.current_session = name
+	end)
 end
 
 ---@param name string|nil
@@ -362,6 +405,24 @@ end
 
 function M.get_session(name)
 	return M.sessions[name]
+end
+
+--- Cancel a pending worktree creation
+---@param name string
+function M.cancel_creation(name)
+	loading.hide()
+	M.creating[name] = nil
+	git.cancel_creation(name)
+	vim.notify("[Vibe] Cancelled creation of session '" .. name .. "'", vim.log.levels.INFO)
+end
+
+--- Cancel all pending worktree creations
+function M.cancel_all_creations()
+	for name, _ in pairs(M.creating) do
+		loading.hide()
+		M.creating[name] = nil
+	end
+	git.cancel_all_creations()
 end
 
 return M

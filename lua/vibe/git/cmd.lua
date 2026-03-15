@@ -35,6 +35,64 @@ function M.get_worktree_base_dir()
 	return worktree_opts.worktree_dir or vim.fn.stdpath("cache") .. "/vibe-worktrees"
 end
 
+--- Execute a git command asynchronously via jobstart
+---@param args string[] Git arguments
+---@param opts table|nil Options (cwd, ignore_error)
+---@param callback function Called with (output, exit_code, error_msg)
+---@return integer job_id
+function M.git_cmd_async(args, opts, callback)
+	opts = opts or {}
+	local cmd_parts = { "git" }
+	for _, arg in ipairs(args) do
+		table.insert(cmd_parts, arg)
+	end
+
+	local stdout_lines = {}
+	local stderr_lines = {}
+
+	local job_id = vim.fn.jobstart(cmd_parts, {
+		cwd = opts.cwd,
+		stdout_buffered = true,
+		stderr_buffered = true,
+		on_stdout = function(_, data)
+			if data then
+				for _, line in ipairs(data) do
+					if line ~= "" then
+						table.insert(stdout_lines, line)
+					end
+				end
+			end
+		end,
+		on_stderr = function(_, data)
+			if data then
+				for _, line in ipairs(data) do
+					if line ~= "" then
+						table.insert(stderr_lines, line)
+					end
+				end
+			end
+		end,
+		on_exit = function(_, exit_code)
+			vim.schedule(function()
+				local output = table.concat(stdout_lines, "\n")
+				local error_msg = nil
+				if exit_code ~= 0 then
+					error_msg = table.concat(stderr_lines, "\n"):gsub("^%s+", ""):gsub("%s+$", "")
+					if error_msg == "" then
+						error_msg = output:gsub("^%s+", ""):gsub("%s+$", "")
+					end
+					if not opts.ignore_error then
+						output = ""
+					end
+				end
+				callback(output, exit_code, error_msg)
+			end)
+		end,
+	})
+
+	return job_id
+end
+
 --- Execute a function with temporary files, guaranteeing cleanup
 ---@param count number Number of temp files to create
 ---@param fn function Function receiving temp file paths as arguments

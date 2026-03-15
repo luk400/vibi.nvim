@@ -19,6 +19,7 @@ M.is_git_repo = worktree.is_git_repo
 M.get_repo_root = worktree.get_repo_root
 M.get_current_branch = worktree.get_current_branch
 M.create_worktree = worktree.create_worktree
+M.create_worktree_async = worktree.create_worktree_async
 M.scan_for_vibe_worktrees = worktree.scan_for_vibe_worktrees
 M.remove_worktree = worktree.remove_worktree
 M.discard_worktree = worktree.discard_worktree
@@ -26,6 +27,9 @@ M.get_worktree_info = worktree.get_worktree_info
 M.get_worktree_by_session = worktree.get_worktree_by_session
 M.cleanup_all_worktrees = worktree.cleanup_all_worktrees
 M.matches_patterns = worktree.matches_patterns
+M.pending_creations = worktree.pending_creations
+M.cancel_creation = worktree.cancel_creation
+M.cancel_all_creations = worktree.cancel_all_creations
 
 -- git/diff.lua
 M.hunk_hash = git_diff.hunk_hash

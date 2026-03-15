@@ -76,6 +76,38 @@ function M.setup(opts)
 		end,
 	})
 
+	-- Create :VibeNew command to always create a new parallel session
+	vim.api.nvim_create_user_command("VibeNew", function(args)
+		local explicit_name = args.args ~= "" and args.args or nil
+		if explicit_name then
+			local name = explicit_name
+			local base_name = name
+			local counter = 1
+			while terminal.sessions[name] do
+				name = base_name .. "_" .. counter
+				counter = counter + 1
+			end
+			terminal.toggle(name)
+		else
+			session.pick_directory(function(cwd)
+				local name = vim.fn.fnamemodify(cwd, ":t")
+				if name == "" then
+					name = "root"
+				end
+				local base_name = name
+				local counter = 1
+				while terminal.sessions[name] do
+					name = base_name .. "_" .. counter
+					counter = counter + 1
+				end
+				terminal.toggle(name, cwd)
+			end)
+		end
+	end, {
+		nargs = "?",
+		desc = "Create a new Vibe session (always creates, never toggles)",
+	})
+
 	-- Create :VibeKill command to terminate a session
 	vim.api.nvim_create_user_command("VibeKill", function(args)
 		if args.args ~= "" then
@@ -202,6 +234,21 @@ function M.setup(opts)
 		desc = "Show Vibe session history",
 	})
 
+	-- Create :VibeCancel command to cancel pending session creation
+	vim.api.nvim_create_user_command("VibeCancel", function(args)
+		if args.args ~= "" then
+			terminal.cancel_creation(args.args)
+		else
+			terminal.cancel_all_creations()
+		end
+	end, {
+		nargs = "?",
+		desc = "Cancel pending Vibe session creation",
+		complete = function(_, _, _)
+			return vim.tbl_keys(terminal.creating)
+		end,
+	})
+
 	-- Create :VibeHelp command
 	vim.api.nvim_create_user_command("VibeHelp", function()
 		require("vibe.help").show()
@@ -260,6 +307,9 @@ function M.setup_quit_protection()
 	vim.api.nvim_create_autocmd("VimLeavePre", {
 		group = group,
 		callback = function()
+			-- Cancel any in-progress async worktree creations
+			terminal.cancel_all_creations()
+
 			git.scan_for_vibe_worktrees()
 			local has_worktrees = next(git.worktrees) ~= nil
 
@@ -350,6 +400,9 @@ function M.git()
 end
 function M.cancel_session()
 	git.cancel_session()
+end
+function M.cancel()
+	terminal.cancel_all_creations()
 end
 function M.has_unresolved_changes()
 	return git.has_worktrees_with_changes()

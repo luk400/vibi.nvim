@@ -9,6 +9,9 @@ local get_worktree_base_dir = git_cmd_mod.get_worktree_base_dir
 ---@type table<string, WorktreeInfo> worktree_path -> WorktreeInfo
 M.worktrees = {}
 
+---@type table<string, { job_id: integer|nil, worktree_path: string|nil, branch: string|nil, repo_root: string|nil, cancelled: boolean }>
+M.pending_creations = {}
+
 local random_seeded = false
 local function seed_random()
 	if not random_seeded then
@@ -151,7 +154,16 @@ function M.create_worktree(session_name, repo_cwd)
 	repo_cwd = repo_cwd or vim.fn.getcwd()
 
 	if not M.is_git_repo(repo_cwd) then
-		vim.notify("[Vibe] Initializing git repository...", vim.log.levels.INFO)
+		local choice = vim.fn.confirm(
+			"[Vibe] This directory is not a git repository.\n"
+				.. "Vibe needs to initialize git and commit all files.\n"
+				.. "Continue?",
+			"&Yes\n&No",
+			2
+		)
+		if choice ~= 1 then
+			return nil, "Please initialize the git repository before starting a new Vibe session."
+		end
 		local ok, err = init_repo(repo_cwd)
 		if not ok then
 			return nil, "Failed to initialize git repository: " .. (err or "unknown error")
@@ -299,6 +311,236 @@ function M.create_worktree(session_name, repo_cwd)
 
 	vim.notify("[Vibe] Created worktree: " .. worktree_path, vim.log.levels.INFO)
 	return info, nil
+end
+
+function M.create_worktree_async(session_name, repo_cwd, callback)
+	repo_cwd = repo_cwd or vim.fn.getcwd()
+
+	-- Phase 1 (sync, fast): validate, cleanup, prepare
+	if not M.is_git_repo(repo_cwd) then
+		local choice = vim.fn.confirm(
+			"[Vibe] This directory is not a git repository.\n"
+				.. "Vibe needs to initialize git and commit all files.\n"
+				.. "Continue?",
+			"&Yes\n&No",
+			2
+		)
+		if choice ~= 1 then
+			callback(nil, "Please initialize the git repository before starting a new Vibe session.")
+			return
+		end
+		local _, exit_code, init_err = git_cmd({ "init" }, { cwd = repo_cwd })
+		if exit_code ~= 0 then
+			callback(nil, "Failed to initialize git repository: " .. (init_err or "unknown error"))
+			return
+		end
+	end
+
+	local repo_root = M.get_repo_root(repo_cwd)
+	if not repo_root then
+		callback(nil, "Failed to get repository root")
+		return
+	end
+
+	cleanup_old_vibe_branches(repo_root)
+
+	local original_branch = M.get_current_branch(repo_cwd) or "main"
+	local uuid, created_at = generate_timestamped_uuid()
+	local branch_name = "vibe-" .. uuid
+	local base_dir = get_worktree_base_dir()
+	local worktree_path = base_dir .. "/" .. uuid
+
+	vim.fn.mkdir(base_dir, "p")
+
+	local _, no_commits_code = git_cmd({ "rev-parse", "HEAD" }, { cwd = repo_cwd, ignore_error = true })
+	if no_commits_code ~= 0 then
+		git_cmd({ "add", "-A" }, { cwd = repo_cwd })
+		local _, _, commit_err = git_cmd({ "commit", "-m", "Initial commit" }, { cwd = repo_cwd })
+		if commit_err then
+			callback(nil, "Failed to create initial commit: " .. commit_err)
+			return
+		end
+	end
+
+	-- Register pending creation for cancellation support
+	local pending = {
+		job_id = nil,
+		worktree_path = worktree_path,
+		branch = branch_name,
+		repo_root = repo_root,
+		cancelled = false,
+	}
+	M.pending_creations[session_name] = pending
+
+	-- Phase 2 (async, slow): git worktree add
+	local retry_count = 0
+	local function try_worktree_add()
+		local job_id = git_cmd_mod.git_cmd_async(
+			{ "worktree", "add", worktree_path, "-b", branch_name },
+			{ cwd = repo_cwd },
+			function(_, exit_code, worktree_err)
+				if pending.cancelled then
+					M.pending_creations[session_name] = nil
+					return
+				end
+
+				if exit_code ~= 0 then
+					if retry_count < 3 then
+						retry_count = retry_count + 1
+						uuid, created_at = generate_timestamped_uuid()
+						branch_name = "vibe-" .. uuid
+						worktree_path = base_dir .. "/" .. uuid
+						pending.worktree_path = worktree_path
+						pending.branch = branch_name
+						try_worktree_add()
+						return
+					end
+					M.pending_creations[session_name] = nil
+					callback(nil, "Failed to create worktree: " .. (worktree_err or "unknown error"))
+					return
+				end
+
+				-- Phase 3 (sync in callback, fast): copy files, snapshot commit
+				local changed_output = git_cmd({ "diff", "--name-only", "HEAD" }, { cwd = repo_cwd, ignore_error = true })
+				local untracked_output = git_cmd(
+					{ "ls-files", "--others", "--exclude-standard" },
+					{ cwd = repo_cwd, ignore_error = true }
+				)
+
+				local files_to_copy = {}
+				for file in (changed_output or ""):gmatch("[^\r\n]+") do
+					if file ~= "" then
+						files_to_copy[file] = true
+					end
+				end
+
+				local untracked_patterns = get_untracked_patterns(repo_root)
+				local copy_all_untracked = config.options
+					and config.options.worktree
+					and config.options.worktree.copy_untracked == true
+
+				for file in (untracked_output or ""):gmatch("[^\r\n]+") do
+					if file ~= "" then
+						if copy_all_untracked or (#untracked_patterns > 0 and M.matches_patterns(file, untracked_patterns)) then
+							files_to_copy[file] = true
+						end
+					end
+				end
+
+				if repo_cwd ~= repo_root then
+					local cwd_relative = repo_cwd
+					if vim.startswith(cwd_relative, repo_root .. "/") then
+						cwd_relative = cwd_relative:sub(#repo_root + 2)
+					elseif vim.startswith(cwd_relative, repo_root) then
+						cwd_relative = cwd_relative:sub(#repo_root + 1)
+						if cwd_relative:sub(1, 1) == "/" then
+							cwd_relative = cwd_relative:sub(2)
+						end
+					end
+
+					if cwd_relative ~= "" then
+						local filtered_files = {}
+						for file, _ in pairs(files_to_copy) do
+							if vim.startswith(file, cwd_relative .. "/") or file == cwd_relative then
+								filtered_files[file] = true
+							end
+						end
+						files_to_copy = filtered_files
+					end
+				end
+
+				for file, _ in pairs(files_to_copy) do
+					local src_path = repo_root .. "/" .. file
+					local dst_path = worktree_path .. "/" .. file
+
+					if vim.fn.filereadable(src_path) == 1 then
+						vim.fn.mkdir(vim.fn.fnamemodify(dst_path, ":h"), "p")
+						vim.fn.writefile(vim.fn.readfile(src_path, "b"), dst_path, "b")
+					elseif vim.fn.isdirectory(src_path) == 1 then
+						vim.fn.mkdir(dst_path, "p")
+					end
+				end
+
+				git_cmd({ "add", "-A" }, { cwd = worktree_path })
+				local _, commit_code, commit_err = git_cmd(
+					{ "commit", "-m", "Vibe snapshot", "--allow-empty" },
+					{ cwd = worktree_path }
+				)
+				if commit_code ~= 0 then
+					git_cmd({ "worktree", "remove", "--force", worktree_path }, { cwd = repo_cwd, ignore_error = true })
+					callback(nil, "Failed to create snapshot commit: " .. (commit_err or "unknown error"))
+					return
+				end
+
+				local commit_hash, _, hash_err = git_cmd({ "rev-parse", "HEAD" }, { cwd = worktree_path })
+				if not commit_hash or commit_hash == "" then
+					git_cmd({ "worktree", "remove", "--force", worktree_path }, { cwd = repo_cwd, ignore_error = true })
+					callback(nil, "Failed to get commit hash: " .. (hash_err or "unknown error"))
+					return
+				end
+
+				local info = {
+					name = session_name,
+					worktree_path = worktree_path,
+					branch = branch_name,
+					snapshot_commit = commit_hash:gsub("^%s+", ""):gsub("%s+$", ""),
+					original_branch = original_branch,
+					repo_root = repo_root,
+					uuid = uuid,
+					created_at = created_at,
+					addressed_hunks = {},
+				}
+				M.worktrees[worktree_path] = info
+
+				persist.save_session(
+					vim.tbl_extend("force", info, { cwd = repo_cwd, last_active = os.time(), has_terminal = true })
+				)
+
+				vim.notify("[Vibe] Created worktree: " .. worktree_path, vim.log.levels.INFO)
+				M.pending_creations[session_name] = nil
+				callback(info, nil)
+			end
+		)
+		pending.job_id = job_id
+	end
+
+	try_worktree_add()
+end
+
+--- Cancel a pending worktree creation
+---@param session_name string
+function M.cancel_creation(session_name)
+	local pending = M.pending_creations[session_name]
+	if not pending then
+		return
+	end
+
+	pending.cancelled = true
+
+	-- Stop the running job
+	if pending.job_id then
+		pcall(vim.fn.jobstop, pending.job_id)
+	end
+
+	-- Clean up partial worktree and branch
+	if pending.worktree_path and pending.repo_root then
+		git_cmd({ "worktree", "remove", "--force", pending.worktree_path }, { cwd = pending.repo_root, ignore_error = true })
+		if pending.branch then
+			git_cmd({ "branch", "-D", pending.branch }, { cwd = pending.repo_root, ignore_error = true })
+		end
+		if vim.fn.isdirectory(pending.worktree_path) == 1 then
+			vim.fn.delete(pending.worktree_path, "rf")
+		end
+	end
+
+	M.pending_creations[session_name] = nil
+end
+
+--- Cancel all pending worktree creations
+function M.cancel_all_creations()
+	for session_name, _ in pairs(M.pending_creations) do
+		M.cancel_creation(session_name)
+	end
 end
 
 function M.scan_for_vibe_worktrees()
