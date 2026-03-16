@@ -72,6 +72,7 @@ function M.check_remaining_files(worktree_path)
 	local files = git.get_unresolved_files(worktree_path)
 
 	if #files == 0 then
+		git.update_snapshot(worktree_path)
 		local info = git.get_worktree_info(worktree_path)
 		local manual_files = {}
 		if info and info.manually_modified_files then

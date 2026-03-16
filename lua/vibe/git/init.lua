@@ -4,6 +4,7 @@ local worktree = require("vibe.git.worktree")
 local git_diff = require("vibe.git.diff")
 local apply = require("vibe.git.apply")
 local git_cmd_mod = require("vibe.git.cmd")
+local persist = require("vibe.persist")
 
 local M = {}
 
@@ -182,6 +183,54 @@ function M.has_worktrees_with_changes()
 		end
 	end
 	return false
+end
+
+--- Update the snapshot commit after all changes have been accepted/resolved.
+--- This resets the baseline so that future reviews only show new changes.
+---@param worktree_path string
+---@return boolean ok
+---@return string|nil error
+function M.update_snapshot(worktree_path)
+	local info = M.worktrees[worktree_path]
+	if not info then
+		return false, "Worktree not found"
+	end
+
+	-- Stage all current worktree state
+	git_cmd_mod.git_cmd({ "add", "-A" }, { cwd = worktree_path })
+
+	-- Create new snapshot commit
+	local _, commit_code, commit_err = git_cmd_mod.git_cmd(
+		{ "commit", "-m", "Vibe snapshot (accepted)", "--allow-empty" },
+		{ cwd = worktree_path }
+	)
+	if commit_code ~= 0 then
+		return false, "Failed to update snapshot: " .. (commit_err or "unknown")
+	end
+
+	-- Get new commit hash
+	local commit_hash = git_cmd_mod.git_cmd({ "rev-parse", "HEAD" }, { cwd = worktree_path })
+	if not commit_hash or commit_hash == "" then
+		return false, "Failed to get commit hash"
+	end
+
+	-- Update in-memory state
+	info.snapshot_commit = commit_hash:gsub("^%s+", ""):gsub("%s+$", "")
+	info.addressed_hunks = {}
+	info.manually_modified_files = {}
+
+	-- Persist to disk
+	local persisted = persist.load_sessions()
+	for _, s in ipairs(persisted) do
+		if s.worktree_path == worktree_path then
+			s.snapshot_commit = info.snapshot_commit
+			s.addressed_hunks = {}
+			break
+		end
+	end
+	persist.save_sessions(persisted)
+
+	return true
 end
 
 -- Legacy Compatibility

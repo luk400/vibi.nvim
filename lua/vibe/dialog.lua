@@ -113,6 +113,7 @@ function M.show(worktree_path, worktree_info, review_mode)
 	end
 
 	if #M.changed_files == 0 then
+		git.update_snapshot(worktree_path)
 		vim.notify("[Vibe] No unresolved files in this session", vim.log.levels.INFO)
 		M.current_worktree_path = nil
 		M.current_session_name = nil
@@ -389,6 +390,8 @@ function M.accept_all()
 		vim.notify("[Vibe] Failed to accept all: " .. (err or "unknown error"), vim.log.levels.ERROR)
 		return
 	end
+
+	git.update_snapshot(M.current_worktree_path)
 
 	M.close()
 	vim.notify("[Vibe] All changes accepted. Agent may continue working.", vim.log.levels.INFO)
