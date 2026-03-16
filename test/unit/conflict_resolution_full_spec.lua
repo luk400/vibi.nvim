@@ -1,15 +1,15 @@
-local conflict_buffer = require("vibe.conflict_buffer")
+-- test/unit/conflict_resolution_full_spec.lua
+-- Tests for the classification engine and resolution logic
+local classifier = require("vibe.review.classifier")
+local types = require("vibe.review.types")
+local resolve = require("vibe.resolve")
 local git = require("vibe.git")
 local helpers = require("test.helpers.git_repo")
 local eq = assert.are.equal
 local is_true = assert.is_true
 local is_false = assert.is_false
 
-local function contains(str, pattern)
-	return str:find(pattern, 1, true) ~= nil or str:find(pattern) ~= nil
-end
-
-describe("Conflict resolution full coverage", function()
+describe("Classification and resolution", function()
 	before_each(function()
 		for path, _ in pairs(git.worktrees) do
 			git.remove_worktree(path)
@@ -21,88 +21,102 @@ describe("Conflict resolution full coverage", function()
 		helpers.cleanup_all()
 	end)
 
-	local original_content = "line 1\nline 2\nline 3\n"
-
-	it("keep_theirs resolves with AI version", function()
-		local repo = helpers.create_test_repo("resolve-theirs", { ["test.txt"] = original_content })
-		local info = git.create_worktree("theirs-sess", repo)
-
-		helpers.write_file(info.worktree_path .. "/test.txt", "line 1\nAI\nline 3\n")
-		helpers.write_file(repo .. "/test.txt", "line 1\nUSER\nline 3\n")
-
-		conflict_buffer.show_file_with_conflicts(info.worktree_path, "test.txt", nil, "auto")
-		local bufnr = vim.api.nvim_get_current_buf()
-
-		conflict_buffer.keep_theirs()
-
-		local final_lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-		local result_str = table.concat(final_lines, "\n")
-
-		is_false(contains(result_str, "<<<<<<< HEAD"))
-		is_true(contains(result_str, "AI"), "AI version should be present after keep_theirs")
-		is_false(contains(result_str, "USER"), "USER version should be removed after keep_theirs")
+	it("resolve_suggestion with accept returns change lines", function()
+		local change = { "AI version" }
+		local base = { "original" }
+		local result = resolve.resolve_suggestion("accept", change, base)
+		eq(1, #result)
+		eq("AI version", result[1])
 	end)
 
-	it("keep_both preserves both versions", function()
-		local repo = helpers.create_test_repo("resolve-both", { ["test.txt"] = original_content })
-		local info = git.create_worktree("both-sess", repo)
-
-		helpers.write_file(info.worktree_path .. "/test.txt", "line 1\nAI\nline 3\n")
-		helpers.write_file(repo .. "/test.txt", "line 1\nUSER\nline 3\n")
-
-		conflict_buffer.show_file_with_conflicts(info.worktree_path, "test.txt", nil, "auto")
-		local bufnr = vim.api.nvim_get_current_buf()
-
-		conflict_buffer.keep_both()
-
-		local final_lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-		local result_str = table.concat(final_lines, "\n")
-
-		is_false(contains(result_str, "<<<<<<< HEAD"))
-		is_true(contains(result_str, "USER"), "USER version should be present after keep_both")
-		is_true(contains(result_str, "AI"), "AI version should be present after keep_both")
+	it("resolve_suggestion with reject returns base lines", function()
+		local change = { "AI version" }
+		local base = { "original" }
+		local result = resolve.resolve_suggestion("reject", change, base)
+		eq(1, #result)
+		eq("original", result[1])
 	end)
 
-	it("keep_none removes both versions", function()
-		local repo = helpers.create_test_repo("resolve-none", { ["test.txt"] = original_content })
-		local info = git.create_worktree("none-sess", repo)
-
-		helpers.write_file(info.worktree_path .. "/test.txt", "line 1\nAI\nline 3\n")
-		helpers.write_file(repo .. "/test.txt", "line 1\nUSER\nline 3\n")
-
-		conflict_buffer.show_file_with_conflicts(info.worktree_path, "test.txt", nil, "auto")
-		local bufnr = vim.api.nvim_get_current_buf()
-
-		conflict_buffer.keep_none()
-
-		local final_lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-		local result_str = table.concat(final_lines, "\n")
-
-		is_false(contains(result_str, "<<<<<<< HEAD"))
-		is_false(contains(result_str, "USER"), "USER version should be removed after keep_none")
-		is_false(contains(result_str, "AI"), "AI version should be removed after keep_none")
+	it("resolve_conflict with keep_user returns user lines", function()
+		local user = { "USER" }
+		local ai = { "AI" }
+		local result = resolve.resolve_conflict("keep_user", user, ai)
+		eq(1, #result)
+		eq("USER", result[1])
 	end)
 
-	it("mixed: 1 auto-merged + 1 conflict", function()
-		local repo = helpers.create_test_repo("resolve-mixed", { ["test.txt"] = original_content })
-		local info = git.create_worktree("mixed-sess", repo)
+	it("resolve_conflict with keep_ai returns AI lines", function()
+		local user = { "USER" }
+		local ai = { "AI" }
+		local result = resolve.resolve_conflict("keep_ai", user, ai)
+		eq(1, #result)
+		eq("AI", result[1])
+	end)
 
+	it("resolve_conflict with edit_manually returns nil", function()
+		local result = resolve.resolve_conflict("edit_manually", { "USER" }, { "AI" })
+		assert.is_nil(result)
+	end)
+
+	it("mixed: 1 auto-merged + 1 conflict via classifier", function()
+		local base = { "line 1", "line 2", "line 3" }
 		-- AI edits line 2 AND adds line 4 at end
-		helpers.write_file(info.worktree_path .. "/test.txt", "line 1\nAI line 2\nline 3\nAI line 4\n")
+		local ai = { "line 1", "AI line 2", "line 3", "AI line 4" }
 		-- User edits line 2 (conflict) but doesn't touch line 4 area
-		helpers.write_file(repo .. "/test.txt", "line 1\nUSER line 2\nline 3\n")
+		local user = { "line 1", "USER line 2", "line 3" }
 
-		local user_lines = vim.fn.readfile(repo .. "/test.txt")
-		local lines, conflicts, auto_merged =
-			conflict_buffer.insert_conflict_markers(user_lines, info.worktree_path, "test.txt", info.name, "auto")
+		local regions = classifier.classify_regions(base, user, ai)
 
-		-- Should have 1 conflict (overlapping edit on line 2)
-		eq(1, #conflicts, "Should have 1 conflict for overlapping edit")
-		-- Should have 1 auto-merged region (AI line 4 addition)
-		assert.is_true(#auto_merged >= 1, "Should have at least 1 auto-merged region")
+		-- Should have a CONFLICT (overlapping edit on line 2) and AI_ONLY (line 4 addition)
+		local has_conflict = false
+		local has_ai_only = false
+		for _, r in ipairs(regions) do
+			if r.classification == types.CONFLICT then
+				has_conflict = true
+			end
+			if r.classification == types.AI_ONLY then
+				has_ai_only = true
+			end
+		end
+		is_true(has_conflict, "Should have a CONFLICT region for overlapping edit")
+		is_true(has_ai_only, "Should have an AI_ONLY region for AI addition")
+	end)
 
-		local result_str = table.concat(lines, "\n")
-		is_true(contains(result_str, "AI line 4"), "Auto-merged AI addition should be present")
-		is_true(contains(result_str, "<<<<<<< HEAD"), "Conflict markers should be present")
+	it("resolution_to_action_v2 maps correctly", function()
+		eq("accepted", resolve.resolution_to_action_v2(types.AI_ONLY, "accept"))
+		eq("rejected", resolve.resolution_to_action_v2(types.AI_ONLY, "reject"))
+		eq("rejected", resolve.resolution_to_action_v2(types.CONFLICT, "keep_user"))
+		eq("accepted", resolve.resolution_to_action_v2(types.CONFLICT, "keep_ai"))
+		eq("accepted", resolve.resolution_to_action_v2(types.CONFLICT, "edit_manually"))
+	end)
+
+	it("get_replacement_for_region works for suggestions", function()
+		local region = {
+			classification = types.AI_ONLY,
+			base_lines = { "original" },
+			user_lines = { "original" },
+			ai_lines = { "AI version" },
+		}
+		local accepted = resolve.get_replacement_for_region(types.AI_ONLY, "accept", region)
+		eq(1, #accepted)
+		eq("AI version", accepted[1])
+
+		local rejected = resolve.get_replacement_for_region(types.AI_ONLY, "reject", region)
+		eq(1, #rejected)
+		eq("original", rejected[1])
+	end)
+
+	it("get_replacement_for_region works for conflicts", function()
+		local region = {
+			classification = types.CONFLICT,
+			base_lines = { "original" },
+			user_lines = { "USER" },
+			ai_lines = { "AI" },
+		}
+		local keep_user = resolve.get_replacement_for_region(types.CONFLICT, "keep_user", region)
+		eq("USER", keep_user[1])
+
+		local keep_ai = resolve.get_replacement_for_region(types.CONFLICT, "keep_ai", region)
+		eq("AI", keep_ai[1])
 	end)
 end)

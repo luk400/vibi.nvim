@@ -33,12 +33,8 @@ local function smart_vibe(session_name_arg)
 			end
 			terminal.toggle(name, cwd)
 		end)
-	elseif session_count == 1 then
-		-- Single session: toggle it directly
-		local single_name = next(terminal.sessions)
-		terminal.toggle(single_name)
 	else
-		-- Multiple sessions: show list
+		-- One or more sessions: show list
 		session.show_list()
 	end
 end
@@ -304,11 +300,22 @@ function M.setup_quit_protection()
 		end,
 	})
 
-	vim.api.nvim_create_autocmd("VimLeavePre", {
+	vim.api.nvim_create_autocmd("QuitPre", {
 		group = group,
+		pattern = "*",
+		nested = true,
 		callback = function()
-			-- Cancel any in-progress async worktree creations
-			terminal.cancel_all_creations()
+
+			-- Only show the dialog when closing the last real (non-floating) window
+			local non_float_wins = 0
+			for _, w in ipairs(vim.api.nvim_list_wins()) do
+				if vim.api.nvim_win_get_config(w).relative == "" then
+					non_float_wins = non_float_wins + 1
+				end
+			end
+			if non_float_wins > 1 then
+				return
+			end
 
 			git.scan_for_vibe_worktrees()
 			local has_worktrees = next(git.worktrees) ~= nil
@@ -336,18 +343,32 @@ function M.setup_quit_protection()
 					default_choice
 				)
 
-				if choice == 1 then
+				if choice == 0 or (has_unresolved and choice == 4) or (not has_unresolved and choice == 3) then
+					-- 0 = Escape, last choice = Cancel
+					vim.cmd("throw 'Vibe: quit cancelled'")
+				elseif choice == 1 then
+			    terminal.cancel_all_creations()
 					git.cleanup_all_worktrees()
 				elseif choice == 2 then
+			    terminal.cancel_all_creations()
 					persist.mark_all_sessions_paused()
 				elseif has_unresolved and choice == 3 then
 					vim.schedule(function()
 						session.show_review_list()
 					end)
 					vim.cmd("throw 'Vibe: quit cancelled'")
-				elseif (has_unresolved and choice == 4) or (not has_unresolved and choice == 3) then
-					vim.cmd("throw 'Vibe: quit cancelled'")
 				end
+			end
+		end,
+	})
+
+	vim.api.nvim_create_autocmd("VimLeavePre", {
+		group = group,
+		callback = function()
+			-- Fallback: mark any remaining sessions as paused for recovery
+			git.scan_for_vibe_worktrees()
+			if next(git.worktrees) ~= nil then
+				persist.mark_all_sessions_paused()
 			end
 		end,
 	})
@@ -379,18 +400,6 @@ function M.show_diff()
 end
 function M.clear_diff()
 	diff.clear()
-end
-function M.accept_hunk()
-	diff.accept_hunk()
-end
-function M.reject_hunk()
-	diff.reject_hunk()
-end
-function M.accept_all_in_file()
-	diff.accept_all_in_file()
-end
-function M.reject_all_in_file()
-	diff.reject_all_in_file()
 end
 function M.diff()
 	return diff

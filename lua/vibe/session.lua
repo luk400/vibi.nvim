@@ -293,28 +293,37 @@ function M.show_review_list()
 			end
 			close()
 
-			-- Show review mode picker as float
+			-- Show review mode picker as float (4 options)
 			local mode_lines = {
-				" Select Review Mode",
+				" Select Merge Mode",
 				" " .. string.rep("─", 50),
-				" 1. Auto-Merge (Apply safe changes, only review conflicts)",
-				" 2. Manual Review (Review all changes manually)",
+				" 1. Auto-Merge All Safe (only review true conflicts)",
+				" 2. Auto-Merge User Only (review AI suggestions + conflicts)",
+				" 3. Auto-Merge AI Only (review your changes + conflicts)",
+				" 4. Review Everything (review all changes)",
 				"",
 				" <CR> select  q cancel",
 			}
+			-- Map line numbers to merge modes
+			local line_to_mode = { [3] = "both", [4] = "user", [5] = "ai", [6] = "none" }
+			local first_mode_line = 3
+			local last_mode_line = 6
+			-- Default cursor to line 4 (Auto-Merge User Only, matching default merge_mode)
+			local default_line = 4
+
 			local mode_bufnr, mode_winid, mode_close = util.create_centered_float({
 				lines = mode_lines,
 				filetype = "vibe_mode_select",
 				min_width = 60,
 				no_default_keymaps = true,
 			})
-			vim.api.nvim_win_set_cursor(mode_winid, { 3, 2 })
+			vim.api.nvim_win_set_cursor(mode_winid, { default_line, 2 })
 			vim.api.nvim_buf_add_highlight(mode_bufnr, -1, "Title", 0, 0, -1)
 			vim.wo[mode_winid].cursorline = true
 
 			local function mode_select()
 				local cursor = vim.api.nvim_win_get_cursor(mode_winid)[1]
-				local mode = (cursor == 3) and "auto" or "manual"
+				local mode = line_to_mode[cursor] or "user"
 				mode_close()
 				require("vibe.dialog").show(info.worktree_path, info, mode)
 			end
@@ -327,26 +336,26 @@ function M.show_review_list()
 			vim.keymap.set("n", "<Esc>", mode_cancel, { buffer = mode_bufnr, silent = true })
 			vim.keymap.set("n", "j", function()
 				local cursor = vim.api.nvim_win_get_cursor(mode_winid)[1]
-				if cursor == 3 then
-					vim.api.nvim_win_set_cursor(mode_winid, { 4, 2 })
+				if cursor < last_mode_line then
+					vim.api.nvim_win_set_cursor(mode_winid, { cursor + 1, 2 })
 				end
 			end, { buffer = mode_bufnr, silent = true })
 			vim.keymap.set("n", "<Down>", function()
 				local cursor = vim.api.nvim_win_get_cursor(mode_winid)[1]
-				if cursor == 3 then
-					vim.api.nvim_win_set_cursor(mode_winid, { 4, 2 })
+				if cursor < last_mode_line then
+					vim.api.nvim_win_set_cursor(mode_winid, { cursor + 1, 2 })
 				end
 			end, { buffer = mode_bufnr, silent = true })
 			vim.keymap.set("n", "k", function()
 				local cursor = vim.api.nvim_win_get_cursor(mode_winid)[1]
-				if cursor == 4 then
-					vim.api.nvim_win_set_cursor(mode_winid, { 3, 2 })
+				if cursor > first_mode_line then
+					vim.api.nvim_win_set_cursor(mode_winid, { cursor - 1, 2 })
 				end
 			end, { buffer = mode_bufnr, silent = true })
 			vim.keymap.set("n", "<Up>", function()
 				local cursor = vim.api.nvim_win_get_cursor(mode_winid)[1]
-				if cursor == 4 then
-					vim.api.nvim_win_set_cursor(mode_winid, { 3, 2 })
+				if cursor > first_mode_line then
+					vim.api.nvim_win_set_cursor(mode_winid, { cursor - 1, 2 })
 				end
 			end, { buffer = mode_bufnr, silent = true })
 		end

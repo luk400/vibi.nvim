@@ -41,140 +41,33 @@ local function modify_user_file(worktrees, worktree_path, filepath, user_file_pa
 	return true, nil
 end
 
-function M.accept_hunk_from_worktree(worktrees, worktree_path, filepath, hunk, user_file_path)
-	local user_added_set = {}
-	for _, idx in ipairs(hunk.user_added_indices or {}) do
-		user_added_set[idx] = true
+--- Apply classified resolution: write resolved lines to user file and sync
+function M.apply_classified_resolution(worktrees, worktree_path, filepath, resolved_lines, user_file_path)
+	local info = worktrees[worktree_path]
+	if not info then
+		return false, "Worktree info not found"
+	end
+	if not user_file_path then
+		user_file_path = info.repo_root .. "/" .. filepath
 	end
 
-	if #(hunk.user_added_indices or {}) == #hunk.removed_lines and #hunk.added_lines == 0 then
-		vim.notify("[Vibe] Hunk skipped — all changes are your own additions", vim.log.levels.INFO)
-		return true, nil
+	local parent_dir = vim.fn.fnamemodify(user_file_path, ":h")
+	if vim.fn.isdirectory(parent_dir) == 0 then
+		vim.fn.mkdir(parent_dir, "p")
 	end
 
-	return modify_user_file(worktrees, worktree_path, filepath, user_file_path, function(lines)
-		local start = hunk.old_start
-		if hunk.type == "add" then
-			if start == 0 then
-				for i = #hunk.added_lines, 1, -1 do
-					table.insert(lines, 1, hunk.added_lines[i])
-				end
-			else
-				for i, l in ipairs(hunk.added_lines) do
-					table.insert(lines, start + i, l)
-				end
-			end
-		elseif hunk.type == "delete" then
-			for i = hunk.old_count, 1, -1 do
-				if not user_added_set[i] then
-					table.remove(lines, start + i - 1)
-				end
-			end
-		else
-			if next(user_added_set) then
-				local all_are_user = #(hunk.user_added_indices or {}) == #hunk.removed_lines
-				if not all_are_user then
-					for i = hunk.old_count, 1, -1 do
-						if not user_added_set[i] then
-							table.remove(lines, start + i - 1)
-						end
-					end
-				end
-				for i, l in ipairs(hunk.added_lines) do
-					table.insert(lines, start + i - 1, l)
-				end
-			else
-				for i = hunk.old_count, 1, -1 do
-					table.remove(lines, start + i - 1)
-				end
-				for i, l in ipairs(hunk.added_lines) do
-					table.insert(lines, start + i - 1, l)
-				end
-			end
-		end
-		return true
-	end)
-end
-
-function M.reject_hunk_from_worktree(worktrees, worktree_path, filepath, hunk, user_file_path)
-	if not hunk then
-		return true
-	end
-	local user_added_set = {}
-	for _, idx in ipairs(hunk.user_added_indices or {}) do
-		user_added_set[idx] = true
-	end
-	if vim.tbl_isempty(user_added_set) then
-		return true
+	local bufnr = vim.fn.bufnr(user_file_path)
+	if bufnr ~= -1 and vim.api.nvim_buf_is_loaded(bufnr) then
+		vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, resolved_lines)
+		vim.api.nvim_buf_call(bufnr, function()
+			vim.cmd("write")
+		end)
+	else
+		vim.fn.writefile(resolved_lines, user_file_path)
 	end
 
-	return modify_user_file(worktrees, worktree_path, filepath, user_file_path, function(lines)
-		for i = #hunk.removed_lines, 1, -1 do
-			if user_added_set[i] then
-				table.remove(lines, hunk.old_start + i - 1)
-			end
-		end
-		return true
-	end)
-end
-
-function M.keep_both_hunk(worktrees, worktree_path, filepath, hunk, user_file_path)
-	local user_added_set = {}
-	for _, idx in ipairs(hunk.user_added_indices or {}) do
-		user_added_set[idx] = true
-	end
-
-	return modify_user_file(worktrees, worktree_path, filepath, user_file_path, function(lines)
-		local start = hunk.old_start
-		if hunk.type == "add" then
-			if start == 0 then
-				-- Prepend added lines, then append user's removed lines
-				local insert_lines = {}
-				for _, l in ipairs(hunk.added_lines) do
-					table.insert(insert_lines, l)
-				end
-				for _, idx in ipairs(hunk.user_added_indices or {}) do
-					if hunk.removed_lines[idx] then
-						table.insert(insert_lines, hunk.removed_lines[idx])
-					end
-				end
-				for i = #insert_lines, 1, -1 do
-					table.insert(lines, 1, insert_lines[i])
-				end
-			else
-				for i, l in ipairs(hunk.added_lines) do
-					table.insert(lines, start + i, l)
-				end
-			end
-		elseif hunk.type == "delete" then
-			for i = hunk.old_count, 1, -1 do
-				if not user_added_set[i] then
-					table.remove(lines, start + i - 1)
-				end
-			end
-		else
-			for i = hunk.old_count, 1, -1 do
-				if not user_added_set[i] then
-					table.remove(lines, start + i - 1)
-				end
-			end
-			for i, l in ipairs(hunk.added_lines) do
-				table.insert(lines, start + i - 1, l)
-			end
-		end
-		return true
-	end)
-end
-
-function M.delete_hunk_range(worktrees, worktree_path, filepath, hunk, user_file_path)
-	return modify_user_file(worktrees, worktree_path, filepath, user_file_path, function(lines)
-		for i = hunk.old_count, 1, -1 do
-			if hunk.old_start + i - 1 <= #lines then
-				table.remove(lines, hunk.old_start + i - 1)
-			end
-		end
-		return true
-	end)
+	M.sync_resolved_file(worktrees, worktree_path, filepath, user_file_path)
+	return true
 end
 
 function M.sync_resolved_file(worktrees, worktree_path, filepath, user_file_path)

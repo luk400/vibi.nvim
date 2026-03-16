@@ -9,19 +9,6 @@ local M = {}
 ---@field next_hunk string Jump to next hunk
 ---@field toggle_preview Toggle diff preview window
 
----@class VibeConflictPopupKeymaps
----@field accept_user string Keep user's version only
----@field accept_ai string Accept AI's version only
----@field accept_both string Keep both user + AI changes
----@field accept_none string Delete all changes in range
----@field close string Close popup
-
----@class VibeConflictPopupConfig
----@field enabled boolean Show popup for overlapping changes
----@field width number Popup width
----@field max_height number Maximum popup height
----@field keymaps VibeConflictPopupKeymaps
-
 ---@class VibeDiffConfig
 ---@field enabled boolean Enable diff display
 ---@field poll_interval number Poll interval in ms (0 = disabled)
@@ -31,9 +18,8 @@ local M = {}
 ---@field on_write boolean Check after writing (to clear diff)
 ---@field max_lines number Max lines per hunk to display
 ---@field keymaps VibeDiffKeymaps
----@field review_user_additions boolean Whether to show user additions with +~ and require explicit accept/reject
----@field conflict_popup VibeConflictPopupConfig Conflict popup configuration
----@field raw_mode boolean Show raw git conflict markers instead of virtual lines (for debugging)
+---@field review_user_additions boolean (deprecated) Use merge_mode instead
+---@field raw_mode boolean (deprecated) No longer used
 
 ---@class VibeWorktreeConfig
 ---@field copy_untracked boolean|string[] Whether to copy untracked files to worktree (true = all, false = none, or list of glob patterns)
@@ -50,6 +36,7 @@ local M = {}
 ---@field on_open "save_all"|"save_current"|"none" Action on open
 ---@field on_close "reload"|"none" Action on close
 ---@field quit_protection boolean Show dialog on quit when sessions exist (disable for testing)
+---@field merge_mode "none"|"user"|"ai"|"both" Auto-merge mode for review
 ---@field diff VibeDiffConfig Diff display configuration
 ---@field worktree VibeWorktreeConfig Worktree configuration
 
@@ -64,6 +51,7 @@ M.defaults = {
 	on_open = "save_all",
 	on_close = "reload",
 	quit_protection = true,
+	merge_mode = "user", -- "none", "user", "ai", "both"
 	diff = {
 		enabled = true,
 		mode = "inline", -- "inline" (default) or "split" (side-by-side)
@@ -167,6 +155,22 @@ local function validate_options(options)
 			vim.log.levels.WARN
 		)
 		options.border = "rounded"
+	end
+
+	local valid_merge_modes = { none = true, user = true, ai = true, both = true }
+	if options.merge_mode and not valid_merge_modes[options.merge_mode] then
+		vim.notify(
+			string.format("[Vibe] Invalid merge_mode '%s', falling back to 'user'", options.merge_mode),
+			vim.log.levels.WARN
+		)
+		options.merge_mode = "user"
+	end
+
+	if options.diff and options.diff.review_user_additions == false then
+		vim.notify(
+			"[Vibe] 'review_user_additions = false' is deprecated. Use merge_mode = 'user' or 'both' instead.",
+			vim.log.levels.WARN
+		)
 	end
 end
 

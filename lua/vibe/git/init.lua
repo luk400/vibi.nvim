@@ -45,20 +45,8 @@ function M.get_user_added_lines(worktree_path, filepath, user_file_path)
 end
 
 -- git/apply.lua (adapt to pass worktrees implicitly)
-function M.accept_hunk_from_worktree(worktree_path, filepath, hunk, user_file_path)
-	return apply.accept_hunk_from_worktree(M.worktrees, worktree_path, filepath, hunk, user_file_path)
-end
-
-function M.reject_hunk_from_worktree(worktree_path, filepath, hunk, user_file_path)
-	return apply.reject_hunk_from_worktree(M.worktrees, worktree_path, filepath, hunk, user_file_path)
-end
-
-function M.keep_both_hunk(worktree_path, filepath, hunk, user_file_path)
-	return apply.keep_both_hunk(M.worktrees, worktree_path, filepath, hunk, user_file_path)
-end
-
-function M.delete_hunk_range(worktree_path, filepath, hunk, user_file_path)
-	return apply.delete_hunk_range(M.worktrees, worktree_path, filepath, hunk, user_file_path)
+function M.apply_classified_resolution(worktree_path, filepath, resolved_lines, user_file_path)
+	return apply.apply_classified_resolution(M.worktrees, worktree_path, filepath, resolved_lines, user_file_path)
 end
 
 function M.sync_resolved_file(worktree_path, filepath, user_file_path)
@@ -79,10 +67,6 @@ end
 
 function M.is_file_fully_addressed(worktree_path, filepath)
 	return apply.is_file_fully_addressed(M.worktrees, worktree_path, filepath, M.get_worktree_file_hunks)
-end
-
-function M.reject_file_from_worktree(worktree_path, filepath)
-	return true
 end
 
 -- Composite functions that use multiple submodules

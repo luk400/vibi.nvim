@@ -46,13 +46,12 @@ describe("Persist and resume cycle", function()
 
 		helpers.write_file(info.worktree_path .. "/test.txt", "AI line 1\nline 2\nAI line 3")
 
-		-- Step 2: accept 1 hunk, mark addressed
+		-- Step 2: accept file, mark hunk addressed
 		local user_file = info.repo_root .. "/test.txt"
 		local hunks = git.get_worktree_file_hunks(info.worktree_path, "test.txt", user_file)
 		assert.is_true(#hunks >= 1)
 
-		hunks[1].user_added_indices = {}
-		git.accept_hunk_from_worktree(info.worktree_path, "test.txt", hunks[1], user_file)
+		git.accept_file_from_worktree(info.worktree_path, "test.txt")
 		git.mark_hunk_addressed(info.worktree_path, "test.txt", hunks[1], "accepted")
 
 		local worktree_path = info.worktree_path

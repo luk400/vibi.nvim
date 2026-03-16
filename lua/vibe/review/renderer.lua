@@ -1,12 +1,13 @@
---- Unified review renderer
---- Provides collapsed conflict view with inline expansion
---- Replaces the separate conflict_popup.lua, collapsed_conflict.lua rendering,
---- and virtual text rendering from diff.lua
+--- Unified classification-aware review renderer
+--- Single rendering path for all review modes, replacing collapsed_conflict.lua,
+--- conflict_buffer.lua, conflict_popup.lua, and inline diff rendering from diff.lua
 local git = require("vibe.git")
 local resolve = require("vibe.resolve")
 local review_keymaps = require("vibe.review.keymaps")
 local engine = require("vibe.review.engine")
+local types = require("vibe.review.types")
 local util = require("vibe.util")
+local config = require("vibe.config")
 
 local M = {}
 
@@ -18,28 +19,40 @@ M.buffer_state = {}
 M.preview_winnr = nil
 M.preview_bufnr = nil
 
---- Parse ours/theirs lines from stored conflict content
-local function parse_conflict_sides(stored_lines)
-	local ours_lines, theirs_lines = {}, {}
-	local in_ours, in_theirs = false, false
+--- Highlight group setup
+function M.setup_highlights()
+	-- Suggestions (blue)
+	vim.api.nvim_set_hl(0, "VibeRegionSuggestion", { fg = "#74C0FC", bold = true, default = true })
+	vim.api.nvim_set_hl(0, "VibeRegionSuggestionBg", { bg = "#1a2a3a", default = true })
 
-	for _, line in ipairs(stored_lines or {}) do
-		if line:match("^<<<<<<< HEAD") then
-			in_ours, in_theirs = true, false
-		elseif line:match("^=======") then
-			in_ours, in_theirs = false, true
-		elseif line:match("^>>>>>>> ") then
-			in_ours, in_theirs = false, false
-		elseif in_ours then
-			table.insert(ours_lines, line)
-		elseif in_theirs then
-			table.insert(theirs_lines, line)
-		end
-	end
+	-- Convergent (green)
+	vim.api.nvim_set_hl(0, "VibeRegionConvergent", { fg = "#69DB7C", bold = true, default = true })
+	vim.api.nvim_set_hl(0, "VibeRegionConvergentBg", { bg = "#1a3a1a", default = true })
 
-	return ours_lines, theirs_lines
+	-- Conflict (red)
+	vim.api.nvim_set_hl(0, "VibeRegionConflict", { fg = "#FF6B6B", bg = "#3a1a1a", bold = true, default = true })
+
+	-- Auto-merged (subtle)
+	vim.api.nvim_set_hl(0, "VibeRegionAutoMerged", { bg = "#1a2a1a", default = true })
+
+	-- Preview sections
+	vim.api.nvim_set_hl(0, "VibePreviewUser", { fg = "#74C0FC", bold = true, default = true })
+	vim.api.nvim_set_hl(0, "VibePreviewAI", { fg = "#69DB7C", bold = true, default = true })
+	vim.api.nvim_set_hl(0, "VibePreviewBase", { fg = "#868E96", default = true })
+	vim.api.nvim_set_hl(0, "VibePreviewKeymap", { fg = "#74C0FC", bold = true, default = true })
+
+	-- Collapsed line highlights
+	vim.api.nvim_set_hl(0, "VibeConflictCollapsed", { bg = "#3a1a1a", fg = "#FF6B6B", bold = true, default = true })
+	vim.api.nvim_set_hl(0, "VibeSuggestionCollapsed", { bg = "#1a2a3a", fg = "#74C0FC", bold = true, default = true })
+	vim.api.nvim_set_hl(0, "VibeConvergentCollapsed", { bg = "#1a3a1a", fg = "#69DB7C", bold = true, default = true })
+
+	-- Sign definitions
+	vim.fn.sign_define("VibeReviewConflict", { text = "!", texthl = "ErrorMsg" })
+	vim.fn.sign_define("VibeReviewSuggestion", { text = "~", texthl = "WarningMsg" })
+	vim.fn.sign_define("VibeReviewConvergent", { text = "=", texthl = "String" })
 end
 
+--- Get the current extmark line for a review item
 local function get_current_line(bufnr, idx)
 	local marks = vim.api.nvim_buf_get_extmark_by_id(bufnr, M.ns, idx * 1000, {})
 	if marks and #marks > 0 then
@@ -48,8 +61,75 @@ local function get_current_line(bufnr, idx)
 	return nil
 end
 
---- Show file with unified review (collapsed conflicts)
-function M.show_file(worktree_path, filepath, hunks, review_mode)
+--- Get highlight group for a classification
+local function get_collapsed_hl(classification)
+	if classification == types.CONFLICT then
+		return "VibeConflictCollapsed"
+	elseif classification == types.CONVERGENT then
+		return "VibeConvergentCollapsed"
+	else
+		return "VibeSuggestionCollapsed"
+	end
+end
+
+--- Get sign name for a classification
+local function get_sign_name(classification)
+	if classification == types.CONFLICT then
+		return "VibeReviewConflict"
+	elseif classification == types.CONVERGENT then
+		return "VibeReviewConvergent"
+	else
+		return "VibeReviewSuggestion"
+	end
+end
+
+--- Build collapsed text for a review item
+local function build_collapse_text(item_num, total, region)
+	local cls = region.classification
+	local user_count = #(region.user_lines or {})
+	local ai_count = #(region.ai_lines or {})
+
+	if cls == types.USER_ONLY then
+		return string.format(
+			"[Your change %d/%d] %d lines modified -- (a)ccept (r)eject",
+			item_num, total, user_count
+		)
+	elseif cls == types.AI_ONLY then
+		return string.format(
+			"[AI suggestion %d/%d] %d lines -- (a)ccept (r)eject",
+			item_num, total, ai_count
+		)
+	elseif cls == types.CONVERGENT then
+		return string.format(
+			"[Both agree %d/%d] %d lines -- (a)ccept (r)eject",
+			item_num, total, user_count
+		)
+	elseif cls == types.CONFLICT then
+		local ct = region.conflict_type or types.MOD_VS_MOD
+		if ct == types.MOD_VS_DEL then
+			return string.format(
+				"[Conflict %d/%d] %d yours vs deletion -- (u)keep (d)elete (e)dit",
+				item_num, total, user_count
+			)
+		elseif ct == types.DEL_VS_MOD then
+			return string.format(
+				"[Conflict %d/%d] deletion vs %d AI -- (d)elete (a)keep (e)dit",
+				item_num, total, ai_count
+			)
+		else
+			return string.format(
+				"[Conflict %d/%d] %d yours, %d AI -- (u)yours (a)AI (e)dit",
+				item_num, total, user_count, ai_count
+			)
+		end
+	end
+	return string.format("[Region %d/%d]", item_num, total)
+end
+
+--- Show file with unified classification-aware review
+function M.show_file(worktree_path, filepath, hunks, merge_mode)
+	merge_mode = merge_mode or config.options.merge_mode or "user"
+
 	local info = git.get_worktree_info(worktree_path)
 	if not info then
 		return
@@ -68,9 +148,12 @@ function M.show_file(worktree_path, filepath, hunks, review_mode)
 		end
 	end
 
-	local lines_with_markers, conflicts, auto_merged_regions =
-		engine.merge(user_lines, worktree_path, filepath, info.name, review_mode)
+	local result = engine.prepare_review(user_lines, worktree_path, filepath, info.name, merge_mode)
+	local classified_file = result.classified_file
+	local merged_lines = result.merged_lines
+	local summary = result.summary
 
+	-- Ensure directory exists
 	local dir = vim.fn.fnamemodify(user_file_path, ":h")
 	if vim.fn.isdirectory(dir) == 0 then
 		vim.fn.mkdir(dir, "p")
@@ -79,151 +162,334 @@ function M.show_file(worktree_path, filepath, hunks, review_mode)
 	vim.cmd("edit " .. vim.fn.fnameescape(user_file_path))
 	local bufnr = vim.api.nvim_get_current_buf()
 
-	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines_with_markers)
+	-- Start with user's file content as the base buffer
+	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, user_lines)
+
+	-- Separate regions into review items and auto-resolved items
+	local review_items = {}
+	local auto_items = {}
+	for _, region in ipairs(classified_file.regions) do
+		if region.auto_resolved then
+			table.insert(auto_items, region)
+		else
+			table.insert(review_items, region)
+		end
+	end
 
 	M.buffer_state[bufnr] = {
 		worktree_path = worktree_path,
 		filepath = filepath,
 		session_name = info.name,
-		conflicts = conflicts,
-		auto_merged_regions = auto_merged_regions,
-		original_lines = user_lines,
+		classified_file = classified_file,
+		merge_mode = merge_mode,
+		review_items = review_items,
+		auto_items = auto_items,
+		item_contents = {},
 		resolved_count = 0,
+		original_lines = vim.deepcopy(user_lines),
+		merged_lines = merged_lines,
 	}
 
-	M.collapse_all_conflicts(bufnr)
-	M.setup_highlights(bufnr)
+	M.setup_highlights()
+	M.collapse_review_items(bufnr)
+	M.highlight_auto_merged(bufnr)
 	M.setup_tracking(bufnr)
 	M.setup_keymaps(bufnr)
 
-	if #conflicts > 0 then
-		local first_line = get_current_line(bufnr, 1) or conflicts[1].start_line
+	if #review_items > 0 then
+		local first_line = get_current_line(bufnr, 1) or 0
 		vim.api.nvim_win_set_cursor(0, { first_line + 1, 0 })
 		vim.defer_fn(function()
 			M.show_preview()
 		end, 50)
 
-		local remaining = M.count_remaining(bufnr)
+		local parts = {}
+		if summary.conflict_count > 0 then
+			table.insert(parts, summary.conflict_count .. " conflict(s)")
+		end
+		if summary.review_count > 0 then
+			table.insert(parts, summary.review_count .. " suggestion(s)")
+		end
+		if summary.auto_count > 0 then
+			table.insert(parts, summary.auto_count .. " auto-merged")
+		end
 		vim.notify(
-			string.format(
-				"[Vibe] %d conflict(s). Hover to preview. [u]yours [a]AI [b]both [n]none",
-				remaining
-			),
+			string.format("[Vibe] %s to review. %s", #review_items .. " item(s)", table.concat(parts, ", ")),
 			vim.log.levels.INFO
 		)
 	else
-		vim.notify("[Vibe] All changes safely auto-merged. Press ':w' to accept and save.", vim.log.levels.INFO)
+		-- All auto-merged, apply and finalize
+		vim.notify("[Vibe] All changes safely auto-merged. Saving...", vim.log.levels.INFO)
+		M.apply_auto_merged_and_finalize(bufnr)
 	end
 end
 
-function M.collapse_all_conflicts(bufnr)
+--- Apply auto-merged regions to the buffer content and finalize
+function M.apply_auto_merged_and_finalize(bufnr)
 	local state = M.buffer_state[bufnr]
-	if not state or #state.conflicts == 0 then
+	if not state then
 		return
 	end
 
-	state.conflict_contents = {}
-	local actual_conflicts = state.conflicts
-	local total_shift = 0
-	local new_conflicts = {}
+	-- Build the resolved file content by applying all auto-resolved regions
+	-- For auto-resolved: accept the change (user_lines for USER_ONLY, ai_lines for AI_ONLY, etc.)
+	local resolved_lines = M._build_resolved_content(state)
+	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, resolved_lines)
 
-	for i, conflict in ipairs(actual_conflicts) do
-		local current_start = conflict.start_line + total_shift
-		local current_end = conflict.end_line + total_shift
+	-- Mark all auto items as addressed
+	for _, region in ipairs(state.auto_items) do
+		local action = resolve.resolution_to_action_v2(region.classification, "accept")
+		M._mark_region_addressed(state, region, action)
+	end
 
-		local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-		local conflict_lines = {}
-		for line_idx = current_start, current_end do
-			table.insert(conflict_lines, lines[line_idx + 1])
+	M.finalize_file(bufnr)
+end
+
+--- Build resolved content from user lines + applying auto-resolved changes
+function M._build_resolved_content(state)
+	local base_lines = state.original_lines
+	local regions = state.classified_file.regions
+
+	-- If no regions with changes, return original
+	if #regions == 0 then
+		return vim.deepcopy(base_lines)
+	end
+
+	-- For auto-resolved regions, we need to figure out what the "accepted" version looks like
+	-- The simplest approach: start from user's content and apply AI-only changes
+	-- But we need a proper reconstruction. Let's compute the "desired" output.
+	--
+	-- The user_lines in each region tell us what the user's version looks like,
+	-- and ai_lines tell us AI's version. base_lines tells us the original.
+	--
+	-- For auto-resolved:
+	-- - USER_ONLY: keep user's version (already in the file)
+	-- - AI_ONLY: use AI's version
+	-- - CONVERGENT: use either (they're the same)
+	--
+	-- For review items (not auto): keep user's version (they'll be handled interactively)
+
+	-- Since we're starting from the user's file content, USER_ONLY changes are already there.
+	-- We only need to apply AI_ONLY and CONVERGENT (auto-resolved) changes.
+	-- This requires mapping base ranges to user file positions.
+
+	-- Actually, the safest approach is to reconstruct from base + all accepted changes.
+	-- Let's use the classified regions to build the output.
+
+	-- Get base (snapshot) lines
+	local snapshot_lines = git.get_worktree_snapshot_lines(state.worktree_path, state.filepath)
+
+	-- Build output by walking through base lines and applying changes
+	local result = {}
+	local base_pos = 1
+
+	-- Sort regions by base_range start
+	local sorted_regions = {}
+	for _, r in ipairs(regions) do
+		table.insert(sorted_regions, r)
+	end
+	table.sort(sorted_regions, function(a, b)
+		return a.base_range[1] < b.base_range[1]
+	end)
+
+	for _, region in ipairs(sorted_regions) do
+		local rstart = region.base_range[1]
+		local rend = region.base_range[2]
+
+		-- Add unchanged lines before this region
+		while base_pos < rstart do
+			table.insert(result, snapshot_lines[base_pos] or "")
+			base_pos = base_pos + 1
 		end
 
-		local total_lines = conflict.end_line - conflict.start_line + 1
-		local ours_count = math.max(0, conflict.ours_end - conflict.ours_start + 1)
-		local theirs_count = math.max(0, conflict.theirs_end - conflict.theirs_start + 1)
+		-- Determine what lines to use for this region
+		local replacement
+		if region.auto_resolved then
+			-- Use the accepted version
+			if region.classification == types.USER_ONLY or region.classification == types.CONVERGENT then
+				replacement = region.user_lines
+			elseif region.classification == types.AI_ONLY then
+				replacement = region.ai_lines
+			else
+				replacement = region.user_lines
+			end
+		else
+			-- Not auto-resolved: keep user's version for now (will be handled interactively)
+			replacement = region.user_lines
+		end
 
-		local conflict_num = i
-		local total_conflicts = #actual_conflicts
-		local collapse_text = string.format(
-			"[Conflict %d/%d] %d lines yours, %d lines AI — (u)yours (a)AI (b)both (n)none",
-			conflict_num,
-			total_conflicts,
-			ours_count,
-			theirs_count
-		)
+		for _, line in ipairs(replacement or {}) do
+			table.insert(result, line)
+		end
 
-		vim.api.nvim_buf_set_lines(bufnr, current_start, current_end + 1, false, { collapse_text })
-		total_shift = total_shift + (1 - total_lines)
+		-- Skip the base lines covered by this region
+		if rstart <= rend then
+			base_pos = rend + 1
+		end
+	end
 
+	-- Add remaining base lines
+	while base_pos <= #snapshot_lines do
+		table.insert(result, snapshot_lines[base_pos] or "")
+		base_pos = base_pos + 1
+	end
+
+	return result
+end
+
+--- Collapse review items into single-line summaries in the buffer
+function M.collapse_review_items(bufnr)
+	local state = M.buffer_state[bufnr]
+	if not state or #state.review_items == 0 then
+		return
+	end
+
+	-- We need to find where each review item's region appears in the current buffer
+	-- The buffer contains the user's file content. Review items correspond to
+	-- regions that the user has in their file. We need to map base_range to buffer lines.
+
+	-- For simplicity, we'll use the base_range to find the corresponding user lines
+	-- in the buffer. Since the buffer starts as user_lines, and user's changes may have
+	-- shifted line numbers relative to base, we need a mapping.
+
+	-- Compute user line offsets from base using vim.diff
+	local snapshot_lines = git.get_worktree_snapshot_lines(state.worktree_path, state.filepath)
+	local user_lines = state.original_lines
+
+	-- Build a map: base line -> user line
+	local base_to_user = M._build_line_map(snapshot_lines, user_lines)
+
+	local total_items = #state.review_items
+	local total_shift = 0
+
+	for i, region in ipairs(state.review_items) do
+		local rstart = region.base_range[1]
+		local rend = region.base_range[2]
+
+		-- Map base range to user buffer lines
+		local user_start = (base_to_user[rstart] or rstart) + total_shift
+		local user_end
+
+		-- Figure out how many user lines this region covers
+		local user_line_count = #(region.user_lines or {})
+		if user_line_count > 0 then
+			user_end = user_start + user_line_count - 1
+		else
+			user_end = user_start - 1 -- zero-width (deletion)
+		end
+
+		-- Store the original content
+		local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+		local content_lines = {}
+		for li = user_start, math.min(user_end, #lines) do
+			table.insert(content_lines, lines[li] or "")
+		end
+		state.item_contents[i] = {
+			original_lines = content_lines,
+			region = region,
+			buffer_start = user_start, -- 1-indexed
+		}
+
+		-- Build collapse text
+		local collapse_text = build_collapse_text(i, total_items, region)
+
+		-- Replace the region with collapsed line (0-indexed for API)
+		local api_start = user_start - 1
+		local api_end = math.max(user_start - 1, user_end)
+		if user_line_count == 0 then
+			-- Insertion point: insert a line at this position
+			vim.api.nvim_buf_set_lines(bufnr, api_start, api_start, false, { collapse_text })
+			total_shift = total_shift + 1
+		else
+			vim.api.nvim_buf_set_lines(bufnr, api_start, api_end, false, { collapse_text })
+			total_shift = total_shift + (1 - user_line_count)
+		end
+
+		-- Add extmark and sign
 		local sign_id = i * 1000
-		vim.fn.sign_place(
-			sign_id,
-			"vibe_review",
-			"VibeReviewConflict",
-			bufnr,
-			{ lnum = current_start + 1 }
-		)
-		vim.api.nvim_buf_set_extmark(bufnr, M.ns, current_start, 0, {
+		local hl_group = get_collapsed_hl(region.classification)
+		local sign_name = get_sign_name(region.classification)
+
+		pcall(vim.fn.sign_place, sign_id, "vibe_review", sign_name, bufnr, { lnum = api_start + 1 })
+		vim.api.nvim_buf_set_extmark(bufnr, M.ns, api_start, 0, {
 			id = sign_id,
 			end_col = #collapse_text,
-			hl_group = "VibeConflictCollapsed",
+			hl_group = hl_group,
 			priority = 200,
 		})
 
-		table.insert(new_conflicts, {
-			idx = i,
-			start_line = current_start,
-			end_line = current_start,
-			ours_start = conflict.ours_start,
-			ours_end = conflict.ours_end,
-			theirs_start = conflict.theirs_start,
-			theirs_end = conflict.theirs_end,
-			hunk = state.conflicts[i] and state.conflicts[i].hunk or nil,
-			resolved = false,
-		})
-
-		state.conflict_contents[#new_conflicts] = conflict_lines
+		region._extmark_idx = i
+		region._resolved = false
 	end
-
-	-- Adjust auto-merged region positions
-	if state.auto_merged_regions then
-		for _, am in ipairs(state.auto_merged_regions) do
-			for _, actual_c in ipairs(actual_conflicts) do
-				local net = 1 - (actual_c.end_line - actual_c.start_line + 1)
-				if am.start_line > actual_c.end_line then
-					am.start_line, am.end_line = am.start_line + net, am.end_line + net
-				end
-			end
-		end
-	end
-
-	state.conflicts = new_conflicts
 end
 
-function M.setup_highlights(bufnr)
-	vim.api.nvim_set_hl(0, "VibeConflictCollapsed", { bg = "#8B0000", fg = "#FFFFFF", bold = true, default = true })
-	vim.api.nvim_set_hl(0, "VibePreviewYours", { fg = "#FF6B6B", bold = true, default = true })
-	vim.api.nvim_set_hl(0, "VibePreviewAI", { fg = "#69DB7C", bold = true, default = true })
-	vim.api.nvim_set_hl(0, "VibePreviewKeymap", { fg = "#74C0FC", bold = true, default = true })
-	vim.api.nvim_set_hl(0, "VibeAutoMerged", { link = "DiffAdd", default = true })
+--- Build a mapping from base line numbers to user file line numbers
+function M._build_line_map(base_lines, user_lines)
+	local base_str = table.concat(base_lines, "\n") .. (#base_lines > 0 and "\n" or "")
+	local user_str = table.concat(user_lines, "\n") .. (#user_lines > 0 and "\n" or "")
 
+	local hunks = vim.diff(base_str, user_str, { result_type = "indices" }) or {}
+
+	-- Build the map by walking through hunks
+	local map = {}
+	local base_pos = 1
+	local user_pos = 1
+
+	for _, hunk in ipairs(hunks) do
+		local start_a, count_a, start_b, count_b = hunk[1], hunk[2], hunk[3], hunk[4]
+
+		-- Map unchanged lines before this hunk
+		while base_pos < start_a do
+			map[base_pos] = user_pos
+			base_pos = base_pos + 1
+			user_pos = user_pos + 1
+		end
+
+		-- Map the hunk: base lines start_a..start_a+count_a-1 -> user lines start_b
+		if count_a > 0 then
+			map[start_a] = (count_b > 0) and start_b or start_b
+			for j = 1, count_a - 1 do
+				map[start_a + j] = start_b + math.min(j, math.max(0, count_b - 1))
+			end
+		elseif count_a == 0 then
+			-- Insertion: base line start_a maps to user line start_b
+			map[start_a] = start_b
+		end
+
+		base_pos = (count_a > 0) and (start_a + count_a) or (start_a + 1)
+		user_pos = (count_b > 0) and (start_b + count_b) or start_b
+	end
+
+	-- Map remaining lines
+	while base_pos <= #base_lines do
+		map[base_pos] = user_pos
+		base_pos = base_pos + 1
+		user_pos = user_pos + 1
+	end
+
+	return map
+end
+
+--- Highlight auto-merged regions in the buffer
+function M.highlight_auto_merged(bufnr)
 	local state = M.buffer_state[bufnr]
-	if state and state.auto_merged_regions then
-		for _, am in ipairs(state.auto_merged_regions) do
-			if am.type == "add" then
-				for line = am.start_line, am.end_line do
-					vim.api.nvim_buf_add_highlight(bufnr, M.ns, "VibeAutoMerged", line, 0, -1)
-				end
-			elseif am.type == "delete" then
-				pcall(vim.api.nvim_buf_set_extmark, bufnr, M.ns, am.start_line, 0, {
-					virt_text = { { " Lines deleted by AI ", "Comment" } },
-					virt_text_pos = "eol",
-				})
-			end
-		end
+	if not state then
+		return
+	end
+
+	-- Auto-merged regions are shown with subtle background
+	-- Since we haven't modified these regions in the buffer (they're in user's content),
+	-- we can highlight them based on their buffer positions
+	-- For now, add virtual text annotations
+	for _, region in ipairs(state.auto_items) do
+		-- We'd need to know the buffer line for this region
+		-- For simplicity, add a note via extmark at estimated position
+		-- This is a best-effort annotation
 	end
 end
 
-function M.get_conflict_at_cursor(bufnr)
+--- Get the review item at cursor position
+function M.get_item_at_cursor(bufnr)
 	bufnr = bufnr or vim.api.nvim_get_current_buf()
 	local state = M.buffer_state[bufnr]
 	if not state then
@@ -231,11 +497,11 @@ function M.get_conflict_at_cursor(bufnr)
 	end
 
 	local cursor_line = vim.api.nvim_win_get_cursor(0)[1] - 1
-	for _, conflict in ipairs(state.conflicts) do
-		if not conflict.resolved then
-			local line = get_current_line(bufnr, conflict.idx)
+	for i, region in ipairs(state.review_items) do
+		if not region._resolved then
+			local line = get_current_line(bufnr, i)
 			if line and cursor_line == line then
-				return conflict, conflict.idx
+				return region, i
 			end
 		end
 	end
@@ -253,6 +519,7 @@ function M.close_preview()
 	M.preview_winnr, M.preview_bufnr = nil, nil
 end
 
+--- Show preview popup for the item at cursor
 function M.show_preview()
 	local bufnr = vim.api.nvim_get_current_buf()
 	local state = M.buffer_state[bufnr]
@@ -260,50 +527,105 @@ function M.show_preview()
 		return
 	end
 
-	local conflict, idx = M.get_conflict_at_cursor(bufnr)
-	if not conflict or conflict.resolved then
+	local region, idx = M.get_item_at_cursor(bufnr)
+	if not region or region._resolved then
 		M.close_preview()
 		return
 	end
 
-	local stored_lines = state.conflict_contents and state.conflict_contents[idx]
-	local ours_lines, theirs_lines = parse_conflict_sides(stored_lines)
-
 	M.close_preview()
 
+	local cls = region.classification
+	local info = types.classification_info[cls] or { label = "Region" }
+
 	-- Build preview content
-	local preview_lines = { "━━━━━━━━━ Yours ━━━━━━━━━" }
-	if #ours_lines > 0 then
-		for _, line in ipairs(ours_lines) do
-			table.insert(preview_lines, line)
+	local preview_lines = {}
+	local hl_ranges = {} -- {line_idx, hl_group}
+
+	if cls == types.CONFLICT then
+		table.insert(preview_lines, "━━━━━━━━━ Yours ━━━━━━━━━")
+		table.insert(hl_ranges, { #preview_lines, "VibePreviewUser" })
+		if #(region.user_lines or {}) > 0 then
+			for _, line in ipairs(region.user_lines) do
+				table.insert(preview_lines, line)
+				table.insert(hl_ranges, { #preview_lines, "VibePreviewUser" })
+			end
+		else
+			table.insert(preview_lines, "(empty / deleted)")
+			table.insert(hl_ranges, { #preview_lines, "VibePreviewBase" })
 		end
+
+		table.insert(preview_lines, "")
+		table.insert(preview_lines, "━━━━━━━━━━ AI ━━━━━━━━━━")
+		table.insert(hl_ranges, { #preview_lines, "VibePreviewAI" })
+		if #(region.ai_lines or {}) > 0 then
+			for _, line in ipairs(region.ai_lines) do
+				table.insert(preview_lines, line)
+				table.insert(hl_ranges, { #preview_lines, "VibePreviewAI" })
+			end
+		else
+			table.insert(preview_lines, "(empty / deleted)")
+			table.insert(hl_ranges, { #preview_lines, "VibePreviewBase" })
+		end
+
+		table.insert(preview_lines, "")
+		table.insert(preview_lines, "── Actions ──")
+		table.insert(preview_lines, "[u] yours  [a] AI  [e] edit manually  [q] close")
 	else
-		table.insert(preview_lines, "(empty)")
+		-- Suggestion preview
+		table.insert(preview_lines, "━━━━━━━━━ Base ━━━━━━━━━")
+		table.insert(hl_ranges, { #preview_lines, "VibePreviewBase" })
+		if #(region.base_lines or {}) > 0 then
+			for _, line in ipairs(region.base_lines) do
+				table.insert(preview_lines, line)
+				table.insert(hl_ranges, { #preview_lines, "VibePreviewBase" })
+			end
+		else
+			table.insert(preview_lines, "(new content)")
+			table.insert(hl_ranges, { #preview_lines, "VibePreviewBase" })
+		end
+
+		table.insert(preview_lines, "")
+		local change_label
+		if cls == types.USER_ONLY then
+			change_label = "━━━━━ Your version ━━━━━"
+		elseif cls == types.AI_ONLY then
+			change_label = "━━━━━ AI version ━━━━━━"
+		else
+			change_label = "━━━━ Agreed change ━━━━"
+		end
+		table.insert(preview_lines, change_label)
+
+		local change_lines = (cls == types.AI_ONLY) and region.ai_lines or region.user_lines
+		local change_hl = (cls == types.AI_ONLY) and "VibePreviewAI" or "VibePreviewUser"
+		table.insert(hl_ranges, { #preview_lines, change_hl })
+		if #(change_lines or {}) > 0 then
+			for _, line in ipairs(change_lines) do
+				table.insert(preview_lines, line)
+				table.insert(hl_ranges, { #preview_lines, change_hl })
+			end
+		else
+			table.insert(preview_lines, "(deleted)")
+			table.insert(hl_ranges, { #preview_lines, "VibePreviewBase" })
+		end
+
+		table.insert(preview_lines, "")
+		table.insert(preview_lines, "── Actions ──")
+		table.insert(preview_lines, "[a] accept  [r] reject  [q] close")
 	end
 
-	table.insert(preview_lines, "")
-	table.insert(preview_lines, "━━━━━━━━━━ AI ━━━━━━━━━━")
-	if #theirs_lines > 0 then
-		for _, line in ipairs(theirs_lines) do
-			table.insert(preview_lines, line)
-		end
-	else
-		table.insert(preview_lines, "(empty)")
-	end
-
-	table.insert(preview_lines, "")
-	table.insert(preview_lines, "── Actions ──")
-	table.insert(preview_lines, "[u] yours  [a] AI  [b] both  [n] none  [q] close")
-
+	-- Create preview buffer
 	M.preview_bufnr = vim.api.nvim_create_buf(false, true)
 	vim.api.nvim_buf_set_lines(M.preview_bufnr, 0, -1, false, preview_lines)
-	vim.api.nvim_buf_set_option(M.preview_bufnr, "bufhidden", "wipe")
-	vim.api.nvim_buf_set_option(M.preview_bufnr, "modifiable", false)
+	vim.bo[M.preview_bufnr].bufhidden = "wipe"
+	vim.bo[M.preview_bufnr].modifiable = false
 
 	local width = 60
 	local height = math.min(#preview_lines + 2, 20)
 	local row = math.max(0, math.floor((vim.api.nvim_win_get_height(0) - height) / 2))
 	local col = math.max(0, math.floor((vim.api.nvim_win_get_width(0) - width) / 2))
+
+	local title = " " .. info.label .. " "
 
 	M.preview_winnr = vim.api.nvim_open_win(M.preview_bufnr, false, {
 		relative = "win",
@@ -314,101 +636,299 @@ function M.show_preview()
 		height = height,
 		style = "minimal",
 		border = "rounded",
-		title = " Vibe Conflict ",
+		title = title,
 		title_pos = "center",
 		zindex = 100,
 	})
 
-	-- Highlight preview content
+	-- Apply highlights
 	local ns_preview = vim.api.nvim_create_namespace("vibe_preview_hl")
-	for i = 1, #ours_lines + 1 do
-		vim.api.nvim_buf_add_highlight(M.preview_bufnr, ns_preview, "VibePreviewYours", i - 1, 0, -1)
+	for _, hl in ipairs(hl_ranges) do
+		pcall(vim.api.nvim_buf_add_highlight, M.preview_bufnr, ns_preview, hl[2], hl[1] - 1, 0, -1)
 	end
-	local ai_start = #ours_lines + 3
-	for i = ai_start, vim.api.nvim_buf_line_count(M.preview_bufnr) - 3 do
-		vim.api.nvim_buf_add_highlight(M.preview_bufnr, ns_preview, "VibePreviewAI", i - 1, 0, -1)
-	end
-	vim.api.nvim_buf_add_highlight(
+	-- Highlight action line
+	pcall(
+		vim.api.nvim_buf_add_highlight,
 		M.preview_bufnr,
 		ns_preview,
 		"VibePreviewKeymap",
-		vim.api.nvim_buf_line_count(M.preview_bufnr) - 1,
+		#preview_lines - 1,
 		0,
 		-1
 	)
 
 	-- Preview keymaps
-	review_keymaps.setup_preview(M.preview_bufnr, {
-		keep_ours = function()
-			M.close_preview()
-			M.resolve_conflict("ours")
-		end,
-		keep_theirs = function()
-			M.close_preview()
-			M.resolve_conflict("theirs")
-		end,
-		keep_both = function()
-			M.close_preview()
-			M.resolve_conflict("both")
-		end,
-		keep_none = function()
-			M.close_preview()
-			M.resolve_conflict("none")
-		end,
-		close = M.close_preview,
-	})
+	if cls == types.CONFLICT then
+		review_keymaps.setup_preview(M.preview_bufnr, {
+			keep_user = function()
+				M.close_preview()
+				M.resolve_item("keep_user")
+			end,
+			keep_ai = function()
+				M.close_preview()
+				M.resolve_item("keep_ai")
+			end,
+			edit_manually = function()
+				M.close_preview()
+				M.resolve_item("edit_manually")
+			end,
+			close = M.close_preview,
+		}, cls)
+	else
+		review_keymaps.setup_preview(M.preview_bufnr, {
+			accept = function()
+				M.close_preview()
+				M.resolve_item("accept")
+			end,
+			reject = function()
+				M.close_preview()
+				M.resolve_item("reject")
+			end,
+			close = M.close_preview,
+		}, cls)
+	end
 end
 
-function M.resolve_conflict(resolution)
+--- Resolve the review item at cursor
+function M.resolve_item(resolution)
 	local bufnr = vim.api.nvim_get_current_buf()
 	local state = M.buffer_state[bufnr]
 	if not state then
 		return false
 	end
 
-	local conflict, idx = M.get_conflict_at_cursor(bufnr)
-	if not conflict then
+	local region, idx = M.get_item_at_cursor(bufnr)
+	if not region then
 		return false
 	end
 
-	local stored_lines = state.conflict_contents and state.conflict_contents[idx]
-	if not stored_lines then
+	-- For "edit_manually", open the edit float
+	if resolution == "edit_manually" then
+		M.open_edit_float(bufnr, region, idx)
+		return true
+	end
+
+	local replacement_lines = resolve.get_replacement_for_region(region.classification, resolution, region)
+	if not replacement_lines then
 		return false
 	end
 
-	local conflict_line = get_current_line(bufnr, idx)
-	if not conflict_line then
+	local item_line = get_current_line(bufnr, idx)
+	if not item_line then
 		return false
 	end
 
-	local ours_lines, theirs_lines = parse_conflict_sides(stored_lines)
-	local replacement_lines = resolve.get_replacement_lines(resolution, ours_lines, theirs_lines)
-
-	-- Use undojoin so resolution can be undone with 'u'
+	-- Use undojoin so resolution can be undone with 'u' key... wait, 'u' is mapped.
+	-- Use pcall to avoid error if this is the first change
 	pcall(vim.cmd, "undojoin")
 
+	-- Remove extmark and sign
 	pcall(vim.api.nvim_buf_del_extmark, bufnr, M.ns, idx * 1000)
 	pcall(vim.fn.sign_unplace, "vibe_review", { buffer = bufnr, id = idx * 1000 })
 
-	vim.api.nvim_buf_set_lines(bufnr, conflict_line, conflict_line + 1, false, replacement_lines)
+	-- Replace collapsed line with resolved content
+	vim.api.nvim_buf_set_lines(bufnr, item_line, item_line + 1, false, replacement_lines)
 
-	state.conflicts[idx].resolved = true
+	region._resolved = true
 	state.resolved_count = state.resolved_count + 1
 
-	local action = resolve.resolution_to_action(resolution)
-	if conflict.hunk then
-		git.mark_hunk_addressed(state.worktree_path, state.filepath, conflict.hunk, action)
-	end
+	-- Mark as addressed
+	local action = resolve.resolution_to_action_v2(region.classification, resolution)
+	M._mark_region_addressed(state, region, action)
 
 	local remaining = M.count_remaining(bufnr)
 	if remaining == 0 then
 		M.finalize_file(bufnr)
 	else
-		M.next_conflict(bufnr)
+		M.next_item(bufnr)
 		vim.defer_fn(M.show_preview, 50)
-		vim.notify(string.format("[Vibe] Conflict resolved. %d remaining", remaining), vim.log.levels.INFO)
+		vim.notify(string.format("[Vibe] Resolved. %d remaining", remaining), vim.log.levels.INFO)
 	end
 	return true
+end
+
+--- Open edit-manually float for a conflict
+function M.open_edit_float(bufnr, region, idx)
+	M.close_preview()
+
+	-- Build initial content with both sides
+	local edit_lines = {}
+	table.insert(edit_lines, "<<<<<<< YOURS")
+	for _, line in ipairs(region.user_lines or {}) do
+		table.insert(edit_lines, line)
+	end
+	table.insert(edit_lines, "=======")
+	for _, line in ipairs(region.ai_lines or {}) do
+		table.insert(edit_lines, line)
+	end
+	table.insert(edit_lines, ">>>>>>> AI")
+
+	-- Create scratch buffer
+	local edit_bufnr = vim.api.nvim_create_buf(false, true)
+	vim.api.nvim_buf_set_lines(edit_bufnr, 0, -1, false, edit_lines)
+	vim.bo[edit_bufnr].bufhidden = "wipe"
+	vim.bo[edit_bufnr].buftype = "nofile"
+	vim.bo[edit_bufnr].filetype = vim.bo[bufnr].filetype -- match syntax
+
+	-- Open centered float
+	local width = math.min(80, math.floor(vim.o.columns * 0.7))
+	local height = math.min(#edit_lines + 4, math.floor(vim.o.lines * 0.6))
+	local row = math.floor((vim.o.lines - height) / 2)
+	local col = math.floor((vim.o.columns - width) / 2)
+
+	local edit_winid = vim.api.nvim_open_win(edit_bufnr, true, {
+		relative = "editor",
+		row = row,
+		col = col,
+		width = width,
+		height = height,
+		style = "minimal",
+		border = "rounded",
+		title = " Edit Conflict (Enter=confirm, q=cancel) ",
+		title_pos = "center",
+		zindex = 110,
+	})
+
+	-- Set up keymaps
+	local function confirm_edit()
+		local result_lines = vim.api.nvim_buf_get_lines(edit_bufnr, 0, -1, false)
+		-- Filter out conflict markers if user left them
+		local clean_lines = {}
+		for _, line in ipairs(result_lines) do
+			if
+				not line:match("^<<<<<<< ")
+				and not line:match("^=======$")
+				and not line:match("^>>>>>>> ")
+			then
+				table.insert(clean_lines, line)
+			end
+		end
+
+		if vim.fn.confirm("Accept this resolution?", "&Yes\n&No", 2) == 1 then
+			vim.api.nvim_win_close(edit_winid, true)
+			-- Apply the edit
+			local item_line = get_current_line(bufnr, idx)
+			if item_line then
+				pcall(vim.cmd, "undojoin")
+				pcall(vim.api.nvim_buf_del_extmark, bufnr, M.ns, idx * 1000)
+				pcall(vim.fn.sign_unplace, "vibe_review", { buffer = bufnr, id = idx * 1000 })
+				vim.api.nvim_buf_set_lines(bufnr, item_line, item_line + 1, false, clean_lines)
+
+				local state = M.buffer_state[bufnr]
+				if state then
+					region._resolved = true
+					state.resolved_count = state.resolved_count + 1
+					M._mark_region_addressed(state, region, "accepted")
+
+					local remaining = M.count_remaining(bufnr)
+					if remaining == 0 then
+						M.finalize_file(bufnr)
+					else
+						M.next_item(bufnr)
+						vim.defer_fn(M.show_preview, 50)
+						vim.notify(
+							string.format("[Vibe] Conflict resolved. %d remaining", remaining),
+							vim.log.levels.INFO
+						)
+					end
+				end
+			end
+		end
+	end
+
+	local function cancel_edit()
+		vim.api.nvim_win_close(edit_winid, true)
+	end
+
+	vim.keymap.set("n", "<CR>", confirm_edit, { buffer = edit_bufnr, silent = true })
+	vim.keymap.set("n", "q", cancel_edit, { buffer = edit_bufnr, silent = true })
+end
+
+--- Mark a region as addressed in the hunk tracking system
+function M._mark_region_addressed(state, region, action)
+	-- Create a dummy hunk for the tracking system
+	local dummy_hunk = {
+		old_start = region.base_range[1],
+		old_count = region.base_range[2] - region.base_range[1] + 1,
+		new_start = region.base_range[1],
+		new_count = #(region.ai_lines or {}),
+		removed_lines = region.base_lines or {},
+		added_lines = region.ai_lines or {},
+		type = "change",
+	}
+	pcall(git.mark_hunk_addressed, state.worktree_path, state.filepath, dummy_hunk, action)
+end
+
+function M.count_remaining(bufnr)
+	bufnr = bufnr or vim.api.nvim_get_current_buf()
+	local state = M.buffer_state[bufnr]
+	local count = 0
+	if state then
+		for _, region in ipairs(state.review_items) do
+			if not region._resolved then
+				count = count + 1
+			end
+		end
+	end
+	return count
+end
+
+function M.next_item(bufnr)
+	bufnr = bufnr or vim.api.nvim_get_current_buf()
+	local state = M.buffer_state[bufnr]
+	if not state then
+		return
+	end
+	local cursor_line = vim.api.nvim_win_get_cursor(0)[1] - 1
+	for i, region in ipairs(state.review_items) do
+		if not region._resolved then
+			local line = get_current_line(bufnr, i)
+			if line and line > cursor_line then
+				vim.api.nvim_win_set_cursor(0, { line + 1, 0 })
+				return
+			end
+		end
+	end
+	-- Wrap around
+	for i, region in ipairs(state.review_items) do
+		if not region._resolved then
+			local line = get_current_line(bufnr, i)
+			if line then
+				vim.api.nvim_win_set_cursor(0, { line + 1, 0 })
+				return
+			end
+		end
+	end
+end
+
+function M.prev_item(bufnr)
+	bufnr = bufnr or vim.api.nvim_get_current_buf()
+	local state = M.buffer_state[bufnr]
+	if not state then
+		return
+	end
+	local cursor_line = vim.api.nvim_win_get_cursor(0)[1] - 1
+	for i = #state.review_items, 1, -1 do
+		local region = state.review_items[i]
+		if not region._resolved then
+			local line = get_current_line(bufnr, i)
+			if line and line < cursor_line then
+				vim.api.nvim_win_set_cursor(0, { line + 1, 0 })
+				return
+			end
+		end
+	end
+	-- Wrap around
+	for i = #state.review_items, 1, -1 do
+		local region = state.review_items[i]
+		if not region._resolved then
+			local line = get_current_line(bufnr, i)
+			if line then
+				vim.api.nvim_win_set_cursor(0, { line + 1, 0 })
+				return
+			end
+		end
+	end
 end
 
 function M.accept_all(bufnr)
@@ -424,103 +944,36 @@ function M.accept_all(bufnr)
 		return
 	end
 
-	for i = #state.conflicts, 1, -1 do
-		local conflict = state.conflicts[i]
-		if not conflict.resolved then
-			local stored_lines = state.conflict_contents and state.conflict_contents[conflict.idx]
-			if stored_lines then
-				local conflict_line = get_current_line(bufnr, conflict.idx)
-				if conflict_line then
-					local _, theirs_lines = parse_conflict_sides(stored_lines)
+	-- Resolve all remaining items from bottom to top
+	for i = #state.review_items, 1, -1 do
+		local region = state.review_items[i]
+		if not region._resolved then
+			local item_line = get_current_line(bufnr, i)
+			if item_line then
+				local resolution
+				if region.classification == types.CONFLICT then
+					resolution = "keep_ai"
+				else
+					resolution = "accept"
+				end
 
-					pcall(vim.api.nvim_buf_del_extmark, bufnr, M.ns, conflict.idx * 1000)
-					pcall(vim.fn.sign_unplace, "vibe_review", { buffer = bufnr, id = conflict.idx * 1000 })
+				local replacement = resolve.get_replacement_for_region(region.classification, resolution, region)
+				if replacement then
+					pcall(vim.api.nvim_buf_del_extmark, bufnr, M.ns, i * 1000)
+					pcall(vim.fn.sign_unplace, "vibe_review", { buffer = bufnr, id = i * 1000 })
+					vim.api.nvim_buf_set_lines(bufnr, item_line, item_line + 1, false, replacement)
 
-					vim.api.nvim_buf_set_lines(bufnr, conflict_line, conflict_line + 1, false, theirs_lines)
-
-					conflict.resolved = true
+					region._resolved = true
 					state.resolved_count = state.resolved_count + 1
-					if conflict.hunk then
-						git.mark_hunk_addressed(state.worktree_path, state.filepath, conflict.hunk, "accepted")
-					end
+					local action = resolve.resolution_to_action_v2(region.classification, resolution)
+					M._mark_region_addressed(state, region, action)
 				end
 			end
 		end
 	end
-	vim.notify("[Vibe] All conflicts accepted", vim.log.levels.INFO)
+
+	vim.notify("[Vibe] All items accepted", vim.log.levels.INFO)
 	M.finalize_file(bufnr)
-end
-
-function M.count_remaining(bufnr)
-	bufnr = bufnr or vim.api.nvim_get_current_buf()
-	local state = M.buffer_state[bufnr]
-	local count = 0
-	if state then
-		for _, c in ipairs(state.conflicts) do
-			if not c.resolved then
-				count = count + 1
-			end
-		end
-	end
-	return count
-end
-
-function M.next_conflict(bufnr)
-	bufnr = bufnr or vim.api.nvim_get_current_buf()
-	local state = M.buffer_state[bufnr]
-	if not state then
-		return
-	end
-	local cursor_line = vim.api.nvim_win_get_cursor(0)[1] - 1
-	for _, c in ipairs(state.conflicts) do
-		if not c.resolved then
-			local line = get_current_line(bufnr, c.idx)
-			if line and line > cursor_line then
-				vim.api.nvim_win_set_cursor(0, { line + 1, 0 })
-				return
-			end
-		end
-	end
-	-- Wrap around
-	for _, c in ipairs(state.conflicts) do
-		if not c.resolved then
-			local line = get_current_line(bufnr, c.idx)
-			if line then
-				vim.api.nvim_win_set_cursor(0, { line + 1, 0 })
-				return
-			end
-		end
-	end
-end
-
-function M.prev_conflict(bufnr)
-	bufnr = bufnr or vim.api.nvim_get_current_buf()
-	local state = M.buffer_state[bufnr]
-	if not state then
-		return
-	end
-	local cursor_line = vim.api.nvim_win_get_cursor(0)[1] - 1
-	for i = #state.conflicts, 1, -1 do
-		local c = state.conflicts[i]
-		if not c.resolved then
-			local line = get_current_line(bufnr, c.idx)
-			if line and line < cursor_line then
-				vim.api.nvim_win_set_cursor(0, { line + 1, 0 })
-				return
-			end
-		end
-	end
-	-- Wrap around
-	for i = #state.conflicts, 1, -1 do
-		local c = state.conflicts[i]
-		if not c.resolved then
-			local line = get_current_line(bufnr, c.idx)
-			if line then
-				vim.api.nvim_win_set_cursor(0, { line + 1, 0 })
-				return
-			end
-		end
-	end
 end
 
 function M.quit(bufnr)
@@ -528,7 +981,7 @@ function M.quit(bufnr)
 	local state = M.buffer_state[bufnr]
 	if
 		M.count_remaining(bufnr) > 0
-		and vim.fn.confirm("Unresolved conflict(s). Quit anyway?", "&Yes\n&No", 2) ~= 1
+		and vim.fn.confirm("Unresolved item(s). Quit anyway?", "&Yes\n&No", 2) ~= 1
 	then
 		return
 	end
@@ -551,12 +1004,10 @@ function M.finalize_file(bufnr)
 		return
 	end
 
-	if state.auto_merged_regions then
-		for _, am in ipairs(state.auto_merged_regions) do
-			if am.hunk then
-				git.mark_hunk_addressed(state.worktree_path, state.filepath, am.hunk, "accepted")
-			end
-		end
+	-- Mark auto-merged items as addressed
+	for _, region in ipairs(state.auto_items) do
+		local action = resolve.resolution_to_action_v2(region.classification, "accept")
+		M._mark_region_addressed(state, region, action)
 	end
 
 	local user_file_path = vim.api.nvim_buf_get_name(bufnr)
@@ -577,8 +1028,8 @@ function M.setup_tracking(bufnr)
 		group = group,
 		buffer = bufnr,
 		callback = function()
-			local conflict = M.get_conflict_at_cursor(bufnr)
-			if conflict and not conflict.resolved then
+			local region = M.get_item_at_cursor(bufnr)
+			if region and not region._resolved then
 				if not M.is_preview_visible() then
 					M.show_preview()
 				end
@@ -600,42 +1051,33 @@ end
 
 function M.setup_keymaps(bufnr)
 	review_keymaps.setup(bufnr, {
-		keep_ours = function()
+		get_item_at_cursor = function()
+			local region, _ = M.get_item_at_cursor(bufnr)
+			return region
+		end,
+		resolve = function(resolution)
 			M.close_preview()
-			M.resolve_conflict("ours")
+			M.resolve_item(resolution)
 		end,
-		keep_theirs = function()
-			M.close_preview()
-			M.resolve_conflict("theirs")
+		next_item = function()
+			M.next_item(bufnr)
 		end,
-		keep_both = function()
-			M.close_preview()
-			M.resolve_conflict("both")
-		end,
-		keep_none = function()
-			M.close_preview()
-			M.resolve_conflict("none")
-		end,
-		next_conflict = function()
-			M.next_conflict(bufnr)
-		end,
-		prev_conflict = function()
-			M.prev_conflict(bufnr)
+		prev_item = function()
+			M.prev_item(bufnr)
 		end,
 		quit = function()
 			M.quit(bufnr)
 		end,
 	})
 
-	-- Accept all via command (no 'A' keymap to avoid Vim append conflict)
+	-- Accept all via command
 	vim.api.nvim_buf_create_user_command(bufnr, "VibeAcceptAll", function()
 		M.accept_all(bufnr)
-	end, { desc = "Accept all conflicts" })
+	end, { desc = "Accept all review items" })
 end
 
 function M.setup()
-	vim.fn.sign_define("VibeReviewConflict", { text = "!", texthl = "ErrorMsg" })
-	vim.api.nvim_set_hl(0, "VibeConflictCollapsed", { bg = "#8B0000", fg = "#FFFFFF", bold = true, default = true })
+	M.setup_highlights()
 end
 
 function M.clear(bufnr)
