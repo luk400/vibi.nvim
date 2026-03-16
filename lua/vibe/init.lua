@@ -277,9 +277,39 @@ function M.setup_quit_protection()
 
 	local group = vim.api.nvim_create_augroup("VibeQuitProtection", { clear = true })
 
+	--- Prevent quit by creating a split window.
+	--- After QuitPre, ex_quit sees only_one_window() is false (2 windows),
+	--- so it just closes the original window instead of quitting Neovim.
+	--- The split survives as the user's window (same buffer, same cursor).
+	---@param after function|nil Optional callback to run after quit is prevented
+	local function prevent_quit(after)
+		vim.cmd("split")
+		if after then
+			vim.schedule(after)
+		end
+	end
+
 	vim.api.nvim_create_autocmd("QuitPre", {
 		group = group,
 		callback = function()
+			-- Skip when closing a floating window (e.g. the :Vibe terminal)
+			local cur_win = vim.api.nvim_get_current_win()
+			if vim.api.nvim_win_get_config(cur_win).relative ~= "" then
+				return
+			end
+
+			-- Only intervene when closing the last real (non-floating) window
+			local non_float_wins = 0
+			for _, w in ipairs(vim.api.nvim_list_wins()) do
+				if vim.api.nvim_win_get_config(w).relative == "" then
+					non_float_wins = non_float_wins + 1
+				end
+			end
+			if non_float_wins > 1 then
+				return
+			end
+
+			-- Check for unresolved AI changes
 			if git.has_worktrees_with_changes() then
 				local worktrees = git.get_worktrees_with_changes()
 				local total_files = 0
@@ -291,73 +321,57 @@ function M.setup_quit_protection()
 						"[Vibe] Warning: " .. total_files .. " file(s) with unresolved AI changes!",
 						vim.log.levels.WARN
 					)
-					vim.schedule(function()
+					prevent_quit(function()
 						session.show_review_list()
 					end)
-					vim.cmd("throw 'Vibe: unresolved changes'")
+					return
 				end
 			end
-		end,
-	})
 
-	vim.api.nvim_create_autocmd("QuitPre", {
-		group = group,
-		pattern = "*",
-		nested = true,
-		callback = function()
-
-			-- Only show the dialog when closing the last real (non-floating) window
-			local non_float_wins = 0
-			for _, w in ipairs(vim.api.nvim_list_wins()) do
-				if vim.api.nvim_win_get_config(w).relative == "" then
-					non_float_wins = non_float_wins + 1
-				end
-			end
-			if non_float_wins > 1 then
+			-- Check for active worktree sessions
+			git.scan_for_vibe_worktrees()
+			if next(git.worktrees) == nil then
 				return
 			end
 
-			git.scan_for_vibe_worktrees()
-			local has_worktrees = next(git.worktrees) ~= nil
+			local worktrees_with_changes = git.get_worktrees_with_changes()
+			local total_unresolved = 0
+			for _, info in ipairs(worktrees_with_changes) do
+				total_unresolved = total_unresolved + #git.get_unresolved_files(info.worktree_path)
+			end
 
-			if has_worktrees then
-				local worktrees_with_changes = git.get_worktrees_with_changes()
-				local total_unresolved = 0
-				for _, info in ipairs(worktrees_with_changes) do
-					total_unresolved = total_unresolved + #git.get_unresolved_files(info.worktree_path)
-				end
+			local session_count = 0
+			for _ in pairs(git.worktrees) do
+				session_count = session_count + 1
+			end
 
-				local session_count = 0
-				for _ in pairs(git.worktrees) do
-					session_count = session_count + 1
-				end
+			local has_unresolved = total_unresolved > 0
+			local choices = has_unresolved
+					and "&Delete All Worktrees\n&Keep All Worktrees\n&Review Changes\n&Cancel"
+				or "&Delete All Worktrees\n&Keep All Worktrees\n&Cancel"
+			local default_choice = has_unresolved and 4 or 3
+			local choice = vim.fn.confirm(
+				string.format("[Vibe] %d session(s) exist. What would you like to do?", session_count),
+				choices,
+				default_choice
+			)
 
-				local has_unresolved = total_unresolved > 0
-				local choices = has_unresolved
-						and "&Delete All Worktrees\n&Keep All Worktrees\n&Review Changes\n&Cancel"
-					or "&Delete All Worktrees\n&Keep All Worktrees\n&Cancel"
-				local default_choice = has_unresolved and 4 or 3
-				local choice = vim.fn.confirm(
-					string.format("[Vibe] %d session(s) exist. What would you like to do?", session_count),
-					choices,
-					default_choice
-				)
-
-				if choice == 0 or (has_unresolved and choice == 4) or (not has_unresolved and choice == 3) then
-					-- 0 = Escape, last choice = Cancel
-					vim.cmd("throw 'Vibe: quit cancelled'")
-				elseif choice == 1 then
-			    terminal.cancel_all_creations()
-					git.cleanup_all_worktrees()
-				elseif choice == 2 then
-			    terminal.cancel_all_creations()
-					persist.mark_all_sessions_paused()
-				elseif has_unresolved and choice == 3 then
-					vim.schedule(function()
-						session.show_review_list()
-					end)
-					vim.cmd("throw 'Vibe: quit cancelled'")
-				end
+			if choice == 0 or (has_unresolved and choice == 4) or (not has_unresolved and choice == 3) then
+				-- Cancel: prevent quit silently
+				prevent_quit()
+			elseif choice == 1 then
+				-- Delete all worktrees
+				terminal.cancel_all_creations()
+				git.cleanup_all_worktrees()
+			elseif choice == 2 then
+				-- Keep all worktrees
+				terminal.cancel_all_creations()
+				persist.mark_all_sessions_paused()
+			elseif has_unresolved and choice == 3 then
+				-- Review changes
+				prevent_quit(function()
+					session.show_review_list()
+				end)
 			end
 		end,
 	})
