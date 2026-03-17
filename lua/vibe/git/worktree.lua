@@ -133,18 +133,40 @@ local function cleanup_old_vibe_branches(repo_cwd)
 	if vim.fn.isdirectory(base_dir) == 1 then
 		for _, uuid in ipairs(vim.fn.readdir(base_dir) or {}) do
 			local worktree_path = base_dir .. "/" .. uuid
-			local wt_list = git_cmd({ "worktree", "list" }, { cwd = repo_cwd, ignore_error = true })
-			local is_registered = false
-			if wt_list then
-				for line in wt_list:gmatch("[^\r\n]+") do
-					if line:match(vim.pesc(worktree_path)) then
-						is_registered = true
-						break
+			-- Skip non-directories (e.g., sessions.json)
+			if vim.fn.isdirectory(worktree_path) == 1 then
+				-- Check if this worktree belongs to the current repo
+				local belongs_to_current_repo = false
+				local git_file = worktree_path .. "/.git"
+				if vim.fn.filereadable(git_file) == 1 then
+					local git_content = vim.fn.readfile(git_file)
+					if git_content and git_content[1] then
+						local gitdir = git_content[1]:gsub("^gitdir:%s*", "")
+						-- gitdir = /path/to/repo/.git/worktrees/<name>
+						-- repo root is 3 levels up
+						local linked_repo = vim.fn.fnamemodify(gitdir, ":h:h:h")
+						belongs_to_current_repo = (linked_repo == repo_cwd)
+					end
+				else
+					-- No .git file = orphaned directory, safe to clean
+					belongs_to_current_repo = true
+				end
+
+				if belongs_to_current_repo then
+					local wt_list = git_cmd({ "worktree", "list" }, { cwd = repo_cwd, ignore_error = true })
+					local is_registered = false
+					if wt_list then
+						for line in wt_list:gmatch("[^\r\n]+") do
+							if line:match(vim.pesc(worktree_path)) then
+								is_registered = true
+								break
+							end
+						end
+					end
+					if not is_registered then
+						vim.fn.delete(worktree_path, "rf")
 					end
 				end
-			end
-			if not is_registered then
-				vim.fn.delete(worktree_path, "rf")
 			end
 		end
 	end

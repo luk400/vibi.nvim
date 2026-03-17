@@ -27,7 +27,8 @@ end
 
 function M.read_file_at_commit(worktree_path, filepath, commit)
 	commit = commit or "HEAD"
-	local cmd = string.format("cd %s && git --no-pager show %s:%s", vim.fn.shellescape(worktree_path), commit, filepath)
+	--local cmd = string.format("cd %s && git --no-pager show %s", vim.fn.shellescape(worktree_path), vim.fn.shellescape(commit .. ":" .. filepath))
+  local cmd = string.format("cd %s && git --no-pager show %s:%s", vim.fn.shellescape(worktree_path), commit, filepath)
 	local result = vim.fn.systemlist(cmd)
 	if vim.v.shell_error ~= 0 then
 		return {}

@@ -60,7 +60,7 @@ function M.create(bufnr, session_name)
 	vim.wo[winid].winhl = "Normal:Normal,FloatBorder:FloatBorder"
 
 	local close_fn = function()
-		require("vibe").toggle()
+		require("vibe").toggle(session_name)
 	end
 	vim.keymap.set("n", "q", close_fn, { buffer = bufnr, silent = true, desc = "Close Vibe window" })
 	vim.keymap.set("n", "<Esc>", close_fn, { buffer = bufnr, silent = true, desc = "Close Vibe window" })

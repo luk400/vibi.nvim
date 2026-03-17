@@ -330,6 +330,21 @@ function M.classify_file(worktree_path, filepath, repo_root)
 
 	local base_lines = git.get_worktree_snapshot_lines(worktree_path, filepath)
 	local base_exists = #base_lines > 0 or (base_lines[1] ~= nil)
+
+	-- Fallback: if worktree snapshot is unavailable, try reading from repo_root
+	if not base_exists and repo_root ~= "" then
+		local diff_mod = require("vibe.git.diff")
+		-- Try the snapshot commit from the worktree info
+		local worktree_info = git.worktrees[worktree_path]
+		if worktree_info and worktree_info.snapshot_commit then
+			base_lines = diff_mod.read_file_at_commit(repo_root, filepath, worktree_info.snapshot_commit)
+		end
+		-- If that fails, try HEAD
+		if #base_lines == 0 then
+			base_lines = diff_mod.read_file_at_commit(repo_root, filepath, "HEAD")
+		end
+		base_exists = #base_lines > 0 or (base_lines[1] ~= nil)
+	end
 	-- Handle the case where git show returns {""}  for an empty file vs {} for non-existent
 	if #base_lines == 1 and base_lines[1] == "" then
 		-- Could be empty file or non-existent, check via git
