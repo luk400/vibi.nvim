@@ -65,6 +65,25 @@ function M.setup(bufnr, handlers)
 	vim.keymap.set("n", "]c", handlers.next_item, vim.tbl_extend("force", opts, { desc = "Next review item" }))
 	vim.keymap.set("n", "[c", handlers.prev_item, vim.tbl_extend("force", opts, { desc = "Previous review item" }))
 
+	-- Scroll preview window
+	vim.keymap.set("n", "<C-d>", function()
+		local renderer = require("vibe.review.renderer")
+		if renderer.is_preview_visible() then
+			vim.api.nvim_win_call(renderer.preview_winnr, function()
+				vim.cmd("normal! \4") -- <C-d>
+			end)
+		end
+	end, vim.tbl_extend("force", opts, { desc = "Scroll preview down" }))
+
+	vim.keymap.set("n", "<C-u>", function()
+		local renderer = require("vibe.review.renderer")
+		if renderer.is_preview_visible() then
+			vim.api.nvim_win_call(renderer.preview_winnr, function()
+				vim.cmd("normal! \21") -- <C-u>
+			end)
+		end
+	end, vim.tbl_extend("force", opts, { desc = "Scroll preview up" }))
+
 	-- Quit
 	vim.keymap.set("n", "q", handlers.quit, vim.tbl_extend("force", opts, { desc = "Quit review" }))
 	vim.keymap.set("n", "<Esc>", handlers.quit, vim.tbl_extend("force", opts, { desc = "Quit review" }))

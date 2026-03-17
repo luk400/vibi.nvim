@@ -396,6 +396,9 @@ function M.collapse_review_items(bufnr)
 		-- Replace the region with collapsed line (0-indexed for API)
 		local api_start = user_start - 1
 		local api_end = math.max(user_start - 1, user_end)
+		local line_count = vim.api.nvim_buf_line_count(bufnr)
+		api_start = math.max(0, math.min(api_start, line_count))
+		api_end = math.max(api_start, math.min(api_end, line_count))
 		if user_line_count == 0 then
 			-- Insertion point: insert a line at this position
 			vim.api.nvim_buf_set_lines(bufnr, api_start, api_start, false, { collapse_text })
@@ -411,7 +414,9 @@ function M.collapse_review_items(bufnr)
 		local sign_name = get_sign_name(region.classification)
 
 		pcall(vim.fn.sign_place, sign_id, "vibe_review", sign_name, bufnr, { lnum = api_start + 1 })
-		vim.api.nvim_buf_set_extmark(bufnr, M.ns, api_start, 0, {
+		line_count = vim.api.nvim_buf_line_count(bufnr)
+		api_start = math.max(0, math.min(api_start, line_count - 1))
+		pcall(vim.api.nvim_buf_set_extmark, bufnr, M.ns, api_start, 0, {
 			id = sign_id,
 			end_col = #collapse_text,
 			hl_group = hl_group,
@@ -543,6 +548,11 @@ function M.show_preview()
 	local hl_ranges = {} -- {line_idx, hl_group}
 
 	if cls == types.CONFLICT then
+		-- Keybindings header (at top, always visible)
+		table.insert(preview_lines, "── [u] yours  [a] AI  [e] edit  [q] close ──")
+		table.insert(hl_ranges, { #preview_lines, "VibePreviewKeymap" })
+		table.insert(preview_lines, "")
+
 		table.insert(preview_lines, "━━━━━━━━━ Yours ━━━━━━━━━")
 		table.insert(hl_ranges, { #preview_lines, "VibePreviewUser" })
 		if #(region.user_lines or {}) > 0 then
@@ -567,11 +577,12 @@ function M.show_preview()
 			table.insert(preview_lines, "(empty / deleted)")
 			table.insert(hl_ranges, { #preview_lines, "VibePreviewBase" })
 		end
-
-		table.insert(preview_lines, "")
-		table.insert(preview_lines, "── Actions ──")
-		table.insert(preview_lines, "[u] yours  [a] AI  [e] edit manually  [q] close")
 	else
+		-- Keybindings header (at top, always visible)
+		table.insert(preview_lines, "── [a] accept  [r] reject  [q] close ──")
+		table.insert(hl_ranges, { #preview_lines, "VibePreviewKeymap" })
+		table.insert(preview_lines, "")
+
 		-- Suggestion preview
 		table.insert(preview_lines, "━━━━━━━━━ Base ━━━━━━━━━")
 		table.insert(hl_ranges, { #preview_lines, "VibePreviewBase" })
@@ -608,10 +619,6 @@ function M.show_preview()
 			table.insert(preview_lines, "(deleted)")
 			table.insert(hl_ranges, { #preview_lines, "VibePreviewBase" })
 		end
-
-		table.insert(preview_lines, "")
-		table.insert(preview_lines, "── Actions ──")
-		table.insert(preview_lines, "[a] accept  [r] reject  [q] close")
 	end
 
 	-- Create preview buffer
@@ -620,10 +627,13 @@ function M.show_preview()
 	vim.bo[M.preview_bufnr].bufhidden = "wipe"
 	vim.bo[M.preview_bufnr].modifiable = false
 
-	local width = 60
-	local height = math.min(#preview_lines + 2, 20)
-	local row = math.max(0, math.floor((vim.api.nvim_win_get_height(0) - height) / 2))
-	local col = math.max(0, math.floor((vim.api.nvim_win_get_width(0) - width) / 2))
+	local win_width = vim.api.nvim_win_get_width(0)
+	local win_height = vim.api.nvim_win_get_height(0)
+	local width = math.max(60, math.floor(win_width * 0.8))
+	local height = math.min(#preview_lines + 2, math.max(20, math.floor(win_height * 0.7)))
+	local needs_scroll = (#preview_lines + 2) > height
+	local row = math.max(0, math.floor((win_height - height) / 2))
+	local col = math.max(0, math.floor((win_width - width) / 2))
 
 	local title = " " .. info.label .. " "
 
@@ -641,21 +651,21 @@ function M.show_preview()
 		zindex = 100,
 	})
 
+	-- If content overflows, update header with scroll hint
+	if needs_scroll then
+		local scroll_hint = "  [C-d/C-u scroll]"
+		local updated_header = preview_lines[1] .. scroll_hint
+		vim.bo[M.preview_bufnr].modifiable = true
+		vim.api.nvim_buf_set_lines(M.preview_bufnr, 0, 1, false, { updated_header })
+		vim.bo[M.preview_bufnr].modifiable = false
+		preview_lines[1] = updated_header
+	end
+
 	-- Apply highlights
 	local ns_preview = vim.api.nvim_create_namespace("vibe_preview_hl")
 	for _, hl in ipairs(hl_ranges) do
 		pcall(vim.api.nvim_buf_add_highlight, M.preview_bufnr, ns_preview, hl[2], hl[1] - 1, 0, -1)
 	end
-	-- Highlight action line
-	pcall(
-		vim.api.nvim_buf_add_highlight,
-		M.preview_bufnr,
-		ns_preview,
-		"VibePreviewKeymap",
-		#preview_lines - 1,
-		0,
-		-1
-	)
 
 	-- Preview keymaps
 	if cls == types.CONFLICT then

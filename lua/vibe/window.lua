@@ -65,6 +65,11 @@ function M.create(bufnr, session_name)
 	vim.keymap.set("n", "q", close_fn, { buffer = bufnr, silent = true, desc = "Close Vibe window" })
 	vim.keymap.set("n", "<Esc>", close_fn, { buffer = bufnr, silent = true, desc = "Close Vibe window" })
 
+	local keymap = config.options.keymap
+	if keymap then
+		vim.keymap.set("n", keymap, close_fn, { buffer = bufnr, silent = true, desc = "Close Vibe window" })
+	end
+
 	-- Terminal-mode keymaps
 	vim.keymap.set("t", "<Esc><Esc>", "<C-\\><C-N>", { buffer = bufnr, silent = true, desc = "Exit terminal mode" })
 	vim.keymap.set("t", "<M-h>", "<C-\\><C-N><C-w>h", { buffer = bufnr, silent = true, desc = "Go to left window" })
