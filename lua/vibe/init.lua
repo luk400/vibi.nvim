@@ -309,12 +309,20 @@ function M.setup_quit_protection()
 				return
 			end
 
-			-- Check for unresolved AI changes
+			-- Scope to current git repo
+			local current_repo_root = git.get_repo_root(vim.fn.getcwd())
+			if not current_repo_root then
+				return
+			end
+
+			-- Check for unresolved AI changes (scoped to current repo)
 			if git.has_worktrees_with_changes() then
 				local worktrees = git.get_worktrees_with_changes()
 				local total_files = 0
 				for _, info in ipairs(worktrees) do
-					total_files = total_files + #git.get_unresolved_files(info.worktree_path)
+					if info.repo_root == current_repo_root then
+						total_files = total_files + #git.get_unresolved_files(info.worktree_path)
+					end
 				end
 				if total_files > 0 then
 					vim.notify(
@@ -330,18 +338,28 @@ function M.setup_quit_protection()
 
 			-- Check for active worktree sessions
 			git.scan_for_vibe_worktrees()
-			if next(git.worktrees) == nil then
+
+			-- Filter to current repo
+			local repo_worktrees = {}
+			for wt_path, info in pairs(git.worktrees) do
+				if info.repo_root == current_repo_root then
+					repo_worktrees[wt_path] = info
+				end
+			end
+			if next(repo_worktrees) == nil then
 				return
 			end
 
 			local worktrees_with_changes = git.get_worktrees_with_changes()
 			local total_unresolved = 0
 			for _, info in ipairs(worktrees_with_changes) do
-				total_unresolved = total_unresolved + #git.get_unresolved_files(info.worktree_path)
+				if info.repo_root == current_repo_root then
+					total_unresolved = total_unresolved + #git.get_unresolved_files(info.worktree_path)
+				end
 			end
 
 			local session_count = 0
-			for _ in pairs(git.worktrees) do
+			for _ in pairs(repo_worktrees) do
 				session_count = session_count + 1
 			end
 
@@ -360,9 +378,19 @@ function M.setup_quit_protection()
 				-- Cancel: prevent quit silently
 				prevent_quit()
 			elseif choice == 1 then
-				-- Delete all worktrees
+				-- Delete worktrees (scoped to current repo) with confirmation
+				local confirm = vim.fn.confirm(
+					"[Vibe] Are you sure? This will permanently delete the worktree(s).",
+					"&Yes\n&No", 2
+				)
+				if confirm ~= 1 then
+					prevent_quit()
+					return
+				end
 				terminal.cancel_all_creations()
-				git.cleanup_all_worktrees()
+				for wt_path, _ in pairs(repo_worktrees) do
+					git.remove_worktree(wt_path)
+				end
 			elseif choice == 2 then
 				-- Keep all worktrees
 				terminal.cancel_all_creations()

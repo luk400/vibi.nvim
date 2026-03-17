@@ -10,7 +10,6 @@ describe("Worktree file copying", function()
 		for path, _ in pairs(git.worktrees) do
 			git.remove_worktree(path)
 		end
-		git.worktrees = {}
 	end)
 
 	after_each(function()

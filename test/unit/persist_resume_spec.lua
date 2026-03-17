@@ -1,4 +1,5 @@
 local git = require("vibe.git")
+local worktree = require("vibe.git.worktree")
 local persist = require("vibe.persist")
 local config = require("vibe.config")
 local helpers = require("test.helpers.git_repo")
@@ -11,7 +12,6 @@ describe("Persist and resume cycle", function()
 		for path, _ in pairs(git.worktrees) do
 			git.remove_worktree(path)
 		end
-		git.worktrees = {}
 
 		custom_dir = vim.fn.tempname() .. "-persist-resume"
 		vim.fn.mkdir(custom_dir, "p")
@@ -27,7 +27,6 @@ describe("Persist and resume cycle", function()
 		for path, _ in pairs(git.worktrees) do
 			git.remove_worktree(path)
 		end
-		git.worktrees = {}
 		if vim.fn.isdirectory(custom_dir) == 1 then
 			vim.fn.delete(custom_dir, "rf")
 		end
@@ -70,7 +69,7 @@ describe("Persist and resume cycle", function()
 		assert.is_true(found, "Session should be found in persisted data")
 
 		-- Step 4: clear in-memory state (simulate restart)
-		git.worktrees = {}
+		for k in pairs(worktree.worktrees) do worktree.worktrees[k] = nil end
 
 		-- Step 5: load sessions and verify
 		local loaded = persist.load_sessions()

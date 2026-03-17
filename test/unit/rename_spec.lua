@@ -8,7 +8,6 @@ describe("VibeRename", function()
 		require("vibe").setup({ quit_protection = false, keymap = false })
 		terminal.sessions = {}
 		terminal.current_session = nil
-		git.worktrees = {}
 	end)
 
 	it("moves session from old key to new key", function()

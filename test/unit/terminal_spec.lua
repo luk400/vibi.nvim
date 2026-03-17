@@ -26,9 +26,12 @@ describe("Terminal Session Management", function()
 
 	it("creates a new terminal session with a valid buffer and job", function()
 		local repo_path = helpers.create_test_repo("term-create")
-		local session = terminal.get_or_create("ai-agent", repo_path)
-
-		assert.is_not_nil(session)
+		local session = nil
+		terminal.get_or_create("ai-agent", repo_path, function(s)
+			session = s
+		end)
+		vim.wait(10000, function() return session ~= nil end, 50)
+		assert.is_not_nil(session, "Session should be created")
 		eq("ai-agent", session.name)
 		is_true(vim.api.nvim_buf_is_valid(session.bufnr), "Terminal buffer should be valid")
 		is_true(vim.fn.jobpid(session.job_id) > 0, "Job should be running")
@@ -39,7 +42,12 @@ describe("Terminal Session Management", function()
 
 	it("kills a session and cleans up its resources", function()
 		local repo_path = helpers.create_test_repo("term-kill")
-		local session = terminal.get_or_create("kill-agent", repo_path)
+		local session = nil
+		terminal.get_or_create("kill-agent", repo_path, function(s)
+			session = s
+		end)
+		vim.wait(10000, function() return session ~= nil end, 50)
+		assert.is_not_nil(session, "Session should be created")
 
 		local bufnr = session.bufnr
 		local wt_path = session.worktree_path
@@ -54,8 +62,10 @@ describe("Terminal Session Management", function()
 	it("toggles window visibility", function()
 		local repo_path = helpers.create_test_repo("term-toggle")
 		terminal.toggle("toggle-agent", repo_path)
+		vim.wait(10000, function() return terminal.sessions["toggle-agent"] ~= nil end, 50)
 
 		local session = terminal.sessions["toggle-agent"]
+		assert.is_not_nil(session, "Session should be created")
 		is_true(session.winid ~= nil and vim.api.nvim_win_is_valid(session.winid), "Window should be open")
 
 		terminal.toggle("toggle-agent")

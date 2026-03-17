@@ -218,7 +218,7 @@ function M.render()
 		lines,
 		"────────────────────────────────────────"
 	)
-	table.insert(lines, "<CR> view  |  a accept  |  r reject  |  A accept all  |  q back")
+	table.insert(lines, "<CR> view  |  <leader>a accept  |  <leader>r reject  |  A accept all  |  q back")
 
 	vim.bo[M.dialog_bufnr].modifiable = true
 	vim.api.nvim_buf_set_lines(M.dialog_bufnr, 0, -1, false, lines)
@@ -277,7 +277,7 @@ function M.setup_keymaps()
 	vim.keymap.set("n", "A", M.accept_all, opts)
 
 	-- File-level accept: copy worktree version, mark all hunks addressed
-	vim.keymap.set("n", "a", function()
+	vim.keymap.set("n", "<leader>a", function()
 		if #M.changed_files == 0 then
 			return
 		end
@@ -304,7 +304,7 @@ function M.setup_keymaps()
 	end, opts)
 
 	-- File-level reject: keep user version, mark all hunks addressed
-	vim.keymap.set("n", "r", function()
+	vim.keymap.set("n", "<leader>r", function()
 		if #M.changed_files == 0 then
 			return
 		end

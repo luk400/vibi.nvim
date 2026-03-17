@@ -2,6 +2,7 @@
 -- Tests for custom worktree_dir configuration (Bug 2)
 -- VibeReview should detect changes when using custom worktree_dir
 local git = require("vibe.git")
+local worktree = require("vibe.git.worktree")
 local persist = require("vibe.persist")
 local config = require("vibe.config")
 local helpers = require("test.helpers.git_repo")
@@ -17,7 +18,6 @@ describe("Custom worktree directory", function()
 		for path, _ in pairs(git.worktrees) do
 			git.remove_worktree(path)
 		end
-		git.worktrees = {}
 
 		-- Create a unique custom worktree directory for each test
 		custom_worktree_dir = vim.fn.tempname() .. "-custom-worktrees"
@@ -38,7 +38,6 @@ describe("Custom worktree directory", function()
 		for path, _ in pairs(git.worktrees) do
 			git.remove_worktree(path)
 		end
-		git.worktrees = {}
 
 		-- Clean up custom worktree directory
 		if vim.fn.isdirectory(custom_worktree_dir) == 1 then
@@ -134,7 +133,7 @@ describe("Custom worktree directory", function()
 		helpers.write_file(info.worktree_path .. "/app.js", "console.log('AI modified');")
 
 		-- Clear the in-memory cache to simulate a fresh scan
-		git.worktrees = {}
+		for k in pairs(worktree.worktrees) do worktree.worktrees[k] = nil end
 
 		-- Scan for worktrees (this is what VibeReview does)
 		git.scan_for_vibe_worktrees()
@@ -181,7 +180,7 @@ describe("Custom worktree directory", function()
 		assert.is_not_nil(original_snapshot, "Original snapshot_commit should not be nil")
 
 		-- Clear in-memory cache
-		git.worktrees = {}
+		for k in pairs(worktree.worktrees) do worktree.worktrees[k] = nil end
 
 		-- Scan to restore
 		git.scan_for_vibe_worktrees()
@@ -226,7 +225,7 @@ describe("Custom worktree directory", function()
 		helpers.write_file(info.worktree_path .. "/app.js", "console.log('modified');")
 
 		-- Clear and rescan
-		git.worktrees = {}
+		for k in pairs(worktree.worktrees) do worktree.worktrees[k] = nil end
 		git.scan_for_vibe_worktrees()
 
 		-- Now should have changes

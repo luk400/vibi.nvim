@@ -418,7 +418,11 @@ end
 
 --- Cancel all pending worktree creations
 function M.cancel_all_creations()
+	local names = {}
 	for name, _ in pairs(M.creating) do
+		table.insert(names, name)
+	end
+	for _, name in ipairs(names) do
 		loading.hide()
 		M.creating[name] = nil
 	end

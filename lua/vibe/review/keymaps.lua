@@ -9,8 +9,8 @@ local M = {}
 function M.setup(bufnr, handlers)
 	local opts = { buffer = bufnr, silent = true, noremap = true }
 
-	-- 'a' key: accept suggestion OR keep AI version for conflicts
-	vim.keymap.set("n", "a", function()
+	-- '<leader>a' key: accept suggestion OR keep AI version for conflicts
+	vim.keymap.set("n", "<leader>a", function()
 		local item = handlers.get_item_at_cursor()
 		if not item then
 			return
@@ -22,21 +22,21 @@ function M.setup(bufnr, handlers)
 		end
 	end, vim.tbl_extend("force", opts, { desc = "Accept / Keep AI" }))
 
-	-- 'r' key: reject suggestion (not valid for conflicts)
-	vim.keymap.set("n", "r", function()
+	-- '<leader>r' key: reject suggestion (not valid for conflicts)
+	vim.keymap.set("n", "<leader>r", function()
 		local item = handlers.get_item_at_cursor()
 		if not item then
 			return
 		end
 		if item.classification == types.CONFLICT then
-			vim.notify("[Vibe] Use (u)yours (a)AI (e)dit for conflicts", vim.log.levels.INFO)
+			vim.notify("[Vibe] Use <leader>u yours <leader>a AI <leader>e dit for conflicts", vim.log.levels.INFO)
 		else
 			handlers.resolve("reject")
 		end
 	end, vim.tbl_extend("force", opts, { desc = "Reject change" }))
 
-	-- 'u' key: keep user version (conflicts only)
-	vim.keymap.set("n", "u", function()
+	-- '<leader>u' key: keep user version (conflicts only)
+	vim.keymap.set("n", "<leader>u", function()
 		local item = handlers.get_item_at_cursor()
 		if not item then
 			return
@@ -44,12 +44,12 @@ function M.setup(bufnr, handlers)
 		if item.classification == types.CONFLICT then
 			handlers.resolve("keep_user")
 		else
-			vim.notify("[Vibe] Use (a)ccept (r)eject for suggestions", vim.log.levels.INFO)
+			vim.notify("[Vibe] Use <leader>a accept <leader>r reject for suggestions", vim.log.levels.INFO)
 		end
 	end, vim.tbl_extend("force", opts, { desc = "Keep yours (conflicts)" }))
 
-	-- 'e' key: edit manually (conflicts only)
-	vim.keymap.set("n", "e", function()
+	-- '<leader>e' key: edit manually (conflicts only)
+	vim.keymap.set("n", "<leader>e", function()
 		local item = handlers.get_item_at_cursor()
 		if not item then
 			return
@@ -78,12 +78,12 @@ function M.setup_preview(preview_bufnr, handlers, classification)
 	local opts = { buffer = preview_bufnr, silent = true, noremap = true }
 
 	if classification == types.CONFLICT then
-		vim.keymap.set("n", "u", handlers.keep_user, opts)
-		vim.keymap.set("n", "a", handlers.keep_ai, opts)
-		vim.keymap.set("n", "e", handlers.edit_manually, opts)
+		vim.keymap.set("n", "<leader>u", handlers.keep_user, opts)
+		vim.keymap.set("n", "<leader>a", handlers.keep_ai, opts)
+		vim.keymap.set("n", "<leader>e", handlers.edit_manually, opts)
 	else
-		vim.keymap.set("n", "a", handlers.accept, opts)
-		vim.keymap.set("n", "r", handlers.reject, opts)
+		vim.keymap.set("n", "<leader>a", handlers.accept, opts)
+		vim.keymap.set("n", "<leader>r", handlers.reject, opts)
 	end
 	vim.keymap.set("n", "q", handlers.close, opts)
 	vim.keymap.set("n", "<Esc>", handlers.close, opts)

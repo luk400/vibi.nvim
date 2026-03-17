@@ -538,7 +538,11 @@ end
 
 --- Cancel all pending worktree creations
 function M.cancel_all_creations()
+	local names = {}
 	for session_name, _ in pairs(M.pending_creations) do
+		table.insert(names, session_name)
+	end
+	for _, session_name in ipairs(names) do
 		M.cancel_creation(session_name)
 	end
 end
@@ -682,7 +686,11 @@ function M.get_worktree_by_session(session_name)
 end
 
 function M.cleanup_all_worktrees()
+	local paths = {}
 	for worktree_path, _ in pairs(M.worktrees) do
+		table.insert(paths, worktree_path)
+	end
+	for _, worktree_path in ipairs(paths) do
 		M.remove_worktree(worktree_path)
 	end
 end
