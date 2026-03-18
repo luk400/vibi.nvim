@@ -245,6 +245,43 @@ function M.setup(opts)
 		end,
 	})
 
+	-- Create :VibeCopyFiles command to copy local files to active worktree
+	vim.api.nvim_create_user_command("VibeCopyFiles", function(args)
+		local session_name = args.args ~= "" and args.args or terminal.current_session
+		if not session_name then
+			local names = vim.tbl_keys(terminal.sessions)
+			if #names == 1 then
+				session_name = names[1]
+			elseif #names > 1 then
+				vim.notify("[Vibe] Multiple sessions active. Specify: :VibeCopyFiles <name>", vim.log.levels.WARN)
+				return
+			else
+				vim.notify("[Vibe] No active sessions", vim.log.levels.ERROR)
+				return
+			end
+		end
+
+		local sess = terminal.sessions[session_name]
+		if not sess or not sess.worktree_path then
+			vim.notify("[Vibe] Session '" .. session_name .. "' not found", vim.log.levels.ERROR)
+			return
+		end
+
+		local info = git.get_worktree_info(sess.worktree_path)
+		if not info then
+			vim.notify("[Vibe] Worktree info not found", vim.log.levels.ERROR)
+			return
+		end
+
+		require("vibe.file_picker").show(sess.worktree_path, info.repo_root)
+	end, {
+		nargs = "?",
+		desc = "Copy local files to active Vibe worktree",
+		complete = function()
+			return vim.tbl_keys(terminal.sessions)
+		end,
+	})
+
 	-- Create :VibeHelp command
 	vim.api.nvim_create_user_command("VibeHelp", function()
 		require("vibe.help").show()

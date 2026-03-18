@@ -31,6 +31,7 @@ M.matches_patterns = worktree.matches_patterns
 M.pending_creations = worktree.pending_creations
 M.cancel_creation = worktree.cancel_creation
 M.cancel_all_creations = worktree.cancel_all_creations
+M.copy_files_to_active_worktree = worktree.copy_files_to_active_worktree
 
 -- git/diff.lua
 M.hunk_hash = git_diff.hunk_hash

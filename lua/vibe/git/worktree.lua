@@ -717,4 +717,138 @@ function M.cleanup_all_worktrees()
 	end
 end
 
+--- Recursively enumerate all files in a directory
+---@param dir_path string Absolute path to directory
+---@param repo_root string Root for computing relative paths
+---@return string[] List of relative file paths
+local function enumerate_files_recursive(dir_path, repo_root)
+	local files = {}
+	local handle = vim.uv.fs_scandir(dir_path)
+	if not handle then
+		return files
+	end
+	while true do
+		local name, ftype = vim.uv.fs_scandir_next(handle)
+		if not name then
+			break
+		end
+		if name ~= ".git" then
+			local full = dir_path .. "/" .. name
+			if ftype == "directory" then
+				vim.list_extend(files, enumerate_files_recursive(full, repo_root))
+			else
+				table.insert(files, full:sub(#repo_root + 2))
+			end
+		end
+	end
+	return files
+end
+
+--- Copy local files to an active worktree and update the snapshot commit.
+--- After copying, creates a new snapshot so the review system sees proper
+--- per-hunk diffs instead of treating copied files as entirely new.
+---@param worktree_path string Path to the active worktree
+---@param relative_paths string[] Relative file or directory paths to copy
+---@return boolean ok
+---@return string|nil error message
+---@return integer copied_count Number of files actually copied
+function M.copy_files_to_active_worktree(worktree_path, relative_paths)
+	local info = M.worktrees[worktree_path]
+	if not info then
+		return false, "Worktree not found", 0
+	end
+
+	local repo_root = info.repo_root
+	local copied_files = {}
+
+	-- Copy files, expanding directories to individual files
+	for _, rel_path in ipairs(relative_paths) do
+		local src = repo_root .. "/" .. rel_path
+		if vim.fn.isdirectory(src) == 1 then
+			local sub_files = enumerate_files_recursive(src, repo_root)
+			for _, sub_file in ipairs(sub_files) do
+				local sub_src = repo_root .. "/" .. sub_file
+				local sub_dst = worktree_path .. "/" .. sub_file
+				if vim.fn.filereadable(sub_src) == 1 then
+					vim.fn.mkdir(vim.fn.fnamemodify(sub_dst, ":h"), "p")
+					vim.fn.writefile(vim.fn.readfile(sub_src, "b"), sub_dst, "b")
+					table.insert(copied_files, sub_file)
+				end
+			end
+		elseif vim.fn.filereadable(src) == 1 then
+			local dst = worktree_path .. "/" .. rel_path
+			vim.fn.mkdir(vim.fn.fnamemodify(dst, ":h"), "p")
+			vim.fn.writefile(vim.fn.readfile(src, "b"), dst, "b")
+			table.insert(copied_files, rel_path)
+		end
+	end
+
+	if #copied_files == 0 then
+		return false, "No files were copied", 0
+	end
+
+	-- Unstage any AI-staged changes to prevent them leaking into snapshot
+	git_cmd({ "reset", "HEAD", "--quiet" }, { cwd = worktree_path, ignore_error = true })
+
+	-- Stage only the copied files
+	local add_args = { "add", "--" }
+	for _, f in ipairs(copied_files) do
+		table.insert(add_args, f)
+	end
+	git_cmd(add_args, { cwd = worktree_path })
+
+	-- Create new snapshot commit
+	local _, commit_code, commit_err = git_cmd(
+		{ "commit", "-m", "Vibe snapshot (file sync)", "--allow-empty" },
+		{ cwd = worktree_path }
+	)
+	if commit_code ~= 0 then
+		return false, "Failed to update snapshot: " .. (commit_err or "unknown"), #copied_files
+	end
+
+	-- Get new commit hash
+	local new_hash = git_cmd({ "rev-parse", "HEAD" }, { cwd = worktree_path })
+	if not new_hash or new_hash == "" then
+		return false, "Failed to get new commit hash", #copied_files
+	end
+
+	-- Update in-memory state
+	info.snapshot_commit = new_hash:gsub("^%s+", ""):gsub("%s+$", "")
+
+	-- Clear addressed hunks for copied files (base changed, old hashes invalid)
+	if info.addressed_hunks then
+		local copied_set = {}
+		for _, f in ipairs(copied_files) do
+			copied_set[f] = true
+		end
+		local new_hunks = {}
+		for _, hunk in ipairs(info.addressed_hunks) do
+			if not copied_set[hunk.filepath] then
+				table.insert(new_hunks, hunk)
+			end
+		end
+		info.addressed_hunks = new_hunks
+	end
+
+	-- Clear manually_modified_files entries for copied files
+	if info.manually_modified_files then
+		for _, f in ipairs(copied_files) do
+			info.manually_modified_files[f] = nil
+		end
+	end
+
+	-- Persist to disk
+	local persisted = persist.load_sessions()
+	for _, s in ipairs(persisted) do
+		if s.worktree_path == worktree_path then
+			s.snapshot_commit = info.snapshot_commit
+			s.addressed_hunks = info.addressed_hunks
+			break
+		end
+	end
+	persist.save_sessions(persisted)
+
+	return true, nil, #copied_files
+end
+
 return M
