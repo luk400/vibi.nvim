@@ -282,6 +282,44 @@ function M.setup(opts)
 		end,
 	})
 
+	-- Create :VibeSync command to bulk-sync local changes to active worktree
+	vim.api.nvim_create_user_command("VibeSync", function(args)
+		local session_name = args.args ~= "" and args.args or terminal.current_session
+		if not session_name then
+			local names = vim.tbl_keys(terminal.sessions)
+			if #names == 1 then
+				session_name = names[1]
+			elseif #names > 1 then
+				vim.notify("[Vibe] Multiple sessions active. Specify: :VibeSync <name>", vim.log.levels.WARN)
+				return
+			else
+				vim.notify("[Vibe] No active sessions", vim.log.levels.ERROR)
+				return
+			end
+		end
+
+		local sess = terminal.sessions[session_name]
+		if not sess or not sess.worktree_path then
+			vim.notify("[Vibe] Session '" .. session_name .. "' not found", vim.log.levels.ERROR)
+			return
+		end
+
+		local ok, err, count = git.sync_local_to_worktree(sess.worktree_path)
+		if not ok then
+			vim.notify("[Vibe] Sync failed: " .. (err or "unknown error"), vim.log.levels.ERROR)
+		elseif count > 0 then
+			vim.notify("[Vibe] Synced " .. count .. " file(s) to worktree", vim.log.levels.INFO)
+		else
+			vim.notify("[Vibe] Everything already in sync", vim.log.levels.INFO)
+		end
+	end, {
+		nargs = "?",
+		desc = "Sync local files to active Vibe worktree",
+		complete = function()
+			return vim.tbl_keys(terminal.sessions)
+		end,
+	})
+
 	-- Create :VibeHelp command
 	vim.api.nvim_create_user_command("VibeHelp", function()
 		require("vibe.help").show()

@@ -76,6 +76,28 @@ local function copy_gitignore_to_worktree(repo_root, worktree_path)
 	end
 end
 
+local function files_differ(path_a, path_b)
+	local a_readable = vim.fn.filereadable(path_a) == 1
+	local b_readable = vim.fn.filereadable(path_b) == 1
+	if a_readable ~= b_readable then
+		return true
+	end
+	if not a_readable then
+		return false
+	end
+	local content_a = vim.fn.readfile(path_a, "b")
+	local content_b = vim.fn.readfile(path_b, "b")
+	if #content_a ~= #content_b then
+		return true
+	end
+	for i = 1, #content_a do
+		if content_a[i] ~= content_b[i] then
+			return true
+		end
+	end
+	return false
+end
+
 local function get_untracked_patterns(repo_root)
 	local opts = config.options or {}
 	local worktree_opts = opts.worktree or {}
@@ -864,6 +886,53 @@ function M.copy_files_to_active_worktree(worktree_path, relative_paths)
 	persist.save_sessions(persisted)
 
 	return true, nil, #copied_files
+end
+
+---@param worktree_path string
+---@return boolean ok
+---@return string|nil error
+---@return integer synced_count
+function M.sync_local_to_worktree(worktree_path)
+	local info = M.worktrees[worktree_path]
+	if not info then
+		return false, "Worktree not found", 0
+	end
+
+	local repo_root = info.repo_root
+	local sync_list = {}
+
+	-- Tracked files: sync if local content differs from worktree content
+	local tracked_output = git_cmd({ "ls-files" }, { cwd = repo_root, ignore_error = true })
+	for file in (tracked_output or ""):gmatch("[^\r\n]+") do
+		if file ~= "" then
+			local local_path = repo_root .. "/" .. file
+			local wt_path = worktree_path .. "/" .. file
+			if vim.fn.filereadable(local_path) == 1 and files_differ(local_path, wt_path) then
+				table.insert(sync_list, file)
+			end
+		end
+	end
+
+	-- Untracked files: sync only if already in worktree and content differs
+	local untracked_output = git_cmd(
+		{ "ls-files", "--others", "--exclude-standard" },
+		{ cwd = repo_root, ignore_error = true }
+	)
+	for file in (untracked_output or ""):gmatch("[^\r\n]+") do
+		if file ~= "" then
+			local local_path = repo_root .. "/" .. file
+			local wt_path = worktree_path .. "/" .. file
+			if vim.fn.filereadable(wt_path) == 1 and files_differ(local_path, wt_path) then
+				table.insert(sync_list, file)
+			end
+		end
+	end
+
+	if #sync_list == 0 then
+		return true, nil, 0
+	end
+
+	return M.copy_files_to_active_worktree(worktree_path, sync_list)
 end
 
 --- Parse .gitignore and return patterns (excluding comments, blanks, negations)

@@ -831,16 +831,16 @@ function M.open_edit_inline(bufnr, region, idx)
 		M._mark_region_addressed(state, region, "accepted")
 
 		local remaining = M.count_remaining(bufnr)
-		if remaining == 0 then
-			M.finalize_file(bufnr)
-		else
-			M.next_item(bufnr)
-			vim.defer_fn(M.show_preview, 50)
-			vim.notify(
-				string.format("[Vibe] Conflict markers inserted. %d remaining", remaining),
-				vim.log.levels.INFO
-			)
-		end
+		local hint_label = remaining > 0 and "continue reviewing" or nil
+		M.show_hint(bufnr, hint_label)
+		local k_done = kd.get_key_or_fallback(bufnr, kd.DESC_DONE, "<leader>c")
+		vim.notify(
+			string.format(
+				"[Vibe] Conflict markers inserted. Edit freely, then %s to continue.",
+				k_done
+			),
+			vim.log.levels.INFO
+		)
 	end
 
 	-- Navigate cursor to the conflict markers
@@ -1070,7 +1070,15 @@ function M.setup_keymaps(bufnr)
 			M.prev_item(bufnr)
 		end,
 		done = function()
-			M.finalize_file(bufnr)
+			local remaining = M.count_remaining(bufnr)
+			if remaining > 0 then
+				M.close_hint()
+				M.next_item(bufnr)
+				vim.defer_fn(M.show_preview, 50)
+				vim.notify(string.format("[Vibe] %d item(s) remaining", remaining), vim.log.levels.INFO)
+			else
+				M.finalize_file(bufnr)
+			end
 		end,
 		quit = function()
 			M.quit(bufnr)
@@ -1088,11 +1096,11 @@ function M.setup()
 end
 
 --- Show floating hint window for accept-file keybind
-function M.show_hint(bufnr)
+function M.show_hint(bufnr, label)
 	M.close_hint()
 
 	local k_done = kd.get_key_or_fallback(bufnr, kd.DESC_DONE, "<leader>c")
-	local hint_text = " " .. k_done .. "  accept file and continue "
+	local hint_text = " " .. k_done .. "  " .. (label or "accept file and continue") .. " "
 
 	M.hint_bufnr = vim.api.nvim_create_buf(false, true)
 	vim.api.nvim_buf_set_lines(M.hint_bufnr, 0, -1, false, { hint_text })
