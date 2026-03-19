@@ -65,6 +65,17 @@ function M.matches_patterns(file, patterns)
 	return false
 end
 
+--- Copy .gitignore from source repo to worktree (even if untracked)
+---@param repo_root string
+---@param worktree_path string
+local function copy_gitignore_to_worktree(repo_root, worktree_path)
+	local src = repo_root .. "/.gitignore"
+	local dst = worktree_path .. "/.gitignore"
+	if vim.fn.filereadable(src) == 1 then
+		vim.fn.writefile(vim.fn.readfile(src, "b"), dst, "b")
+	end
+end
+
 local function get_untracked_patterns(repo_root)
 	local opts = config.options or {}
 	local worktree_opts = opts.worktree or {}
@@ -298,6 +309,8 @@ function M.create_worktree(session_name, repo_cwd)
 		end
 	end
 
+	copy_gitignore_to_worktree(repo_root, worktree_path)
+
 	git_cmd({ "add", "-A" }, { cwd = worktree_path })
 	local _, commit_code, commit_err = git_cmd(
 		{ "commit", "-m", "Vibe snapshot", "--allow-empty" },
@@ -482,6 +495,8 @@ function M.create_worktree_async(session_name, repo_cwd, callback)
 						vim.fn.mkdir(dst_path, "p")
 					end
 				end
+
+				copy_gitignore_to_worktree(repo_root, worktree_path)
 
 				git_cmd({ "add", "-A" }, { cwd = worktree_path })
 				local _, commit_code, commit_err = git_cmd(
@@ -849,6 +864,55 @@ function M.copy_files_to_active_worktree(worktree_path, relative_paths)
 	persist.save_sessions(persisted)
 
 	return true, nil, #copied_files
+end
+
+--- Parse .gitignore and return patterns (excluding comments, blanks, negations)
+---@param repo_root string
+---@return string[]|nil
+function M.parse_gitignore(repo_root)
+	local gitignore_path = repo_root .. "/.gitignore"
+	if vim.fn.filereadable(gitignore_path) ~= 1 then
+		return nil
+	end
+	local patterns = {}
+	for line in io.lines(gitignore_path) do
+		line = line:gsub("^%s+", ""):gsub("%s+$", "")
+		if line ~= "" and not line:match("^#") and not line:match("^!") then
+			table.insert(patterns, line)
+		end
+	end
+	return #patterns > 0 and patterns or nil
+end
+
+--- Check if a filepath matches any gitignore pattern
+---@param filepath string
+---@param patterns string[]
+---@return boolean
+function M.matches_gitignore(filepath, patterns)
+	for _, pattern in ipairs(patterns) do
+		local pat = pattern:gsub("/$", "") -- strip trailing /
+		if pat:find("/") then
+			-- Anchored pattern: match against full path
+			pat = pat:gsub("^/", "")
+			if
+				M.matches_patterns(filepath, { pat })
+				or M.matches_patterns(filepath, { pat .. "/**" })
+			then
+				return true
+			end
+		else
+			-- Unanchored: match if any path segment matches, or as prefix
+			if
+				M.matches_patterns(filepath, { pat })
+				or M.matches_patterns(filepath, { pat .. "/**" })
+				or M.matches_patterns(filepath, { "**/" .. pat })
+				or M.matches_patterns(filepath, { "**/" .. pat .. "/**" })
+			then
+				return true
+			end
+		end
+	end
+	return false
 end
 
 return M

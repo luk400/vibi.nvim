@@ -28,6 +28,8 @@ M.get_worktree_info = worktree.get_worktree_info
 M.get_worktree_by_session = worktree.get_worktree_by_session
 M.cleanup_all_worktrees = worktree.cleanup_all_worktrees
 M.matches_patterns = worktree.matches_patterns
+M.parse_gitignore = worktree.parse_gitignore
+M.matches_gitignore = worktree.matches_gitignore
 M.pending_creations = worktree.pending_creations
 M.cancel_creation = worktree.cancel_creation
 M.cancel_all_creations = worktree.cancel_all_creations
@@ -112,7 +114,21 @@ function M.get_worktree_changed_files(worktree_path)
 
 	process_output(output)
 	process_output(untracked_output)
-	return files
+
+	local gitignore_patterns = worktree.parse_gitignore(info.repo_root)
+	local ignored_count = 0
+	if gitignore_patterns then
+		local filtered = {}
+		for _, file in ipairs(files) do
+			if worktree.matches_gitignore(file, gitignore_patterns) then
+				ignored_count = ignored_count + 1
+			else
+				table.insert(filtered, file)
+			end
+		end
+		files = filtered
+	end
+	return files, ignored_count
 end
 
 function M.get_unresolved_files(worktree_path)
@@ -121,7 +137,7 @@ function M.get_unresolved_files(worktree_path)
 		return {}
 	end
 
-	local changed_files = M.get_worktree_changed_files(worktree_path)
+	local changed_files, ignored_count = M.get_worktree_changed_files(worktree_path)
 	local unresolved = {}
 
 	for _, filepath in ipairs(changed_files) do
@@ -152,7 +168,7 @@ function M.get_unresolved_files(worktree_path)
 		end
 	end
 
-	return unresolved
+	return unresolved, ignored_count or 0
 end
 
 function M.get_worktrees_with_changes()

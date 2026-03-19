@@ -25,6 +25,9 @@ M.current_session_name = nil
 ---@type string "none"|"user"|"ai"|"both"
 M.review_mode = "user"
 
+---@type integer Number of gitignored files omitted from review
+M.ignored_count = 0
+
 ---@type table<string, {added: integer, removed: integer}> Per-file hunk stats cache
 M.hunk_cache = {}
 
@@ -45,6 +48,7 @@ function M.show(worktree_path, worktree_info, review_mode)
 	M.current_worktree_path = nil
 	M.current_session_name = nil
 	M.file_status_cache = {}
+	M.ignored_count = 0
 
 	if not worktree_path then
 		local worktrees = git.get_worktrees_with_changes()
@@ -69,7 +73,9 @@ function M.show(worktree_path, worktree_info, review_mode)
 
 	M.current_worktree_path = worktree_path
 	M.current_session_name = info.name
-	M.changed_files = git.get_unresolved_files(worktree_path)
+	local unresolved, ignored_count = git.get_unresolved_files(worktree_path)
+	M.changed_files = unresolved
+	M.ignored_count = ignored_count or 0
 	M.hunk_cache = {}
 	M.file_status_cache = {}
 	local classifier = require("vibe.review.classifier")
@@ -150,6 +156,7 @@ function M.close()
 	M.selected_idx = 1
 	M.current_worktree_path = nil
 	M.current_session_name = nil
+	M.ignored_count = 0
 end
 
 function M.is_open()
@@ -213,6 +220,15 @@ function M.render()
 		table.insert(lines, table.concat(parts))
 	end
 
+	if M.ignored_count > 0 then
+		table.insert(lines, "")
+		table.insert(lines, string.format(
+			"  (%d file%s matching .gitignore omitted)",
+			M.ignored_count,
+			M.ignored_count == 1 and "" or "s"
+		))
+	end
+
 	table.insert(lines, "")
 	table.insert(
 		lines,
@@ -249,7 +265,12 @@ function M.render()
 	end
 
 	vim.api.nvim_buf_add_highlight(M.dialog_bufnr, -1, "VibeDialogHeader", 0, 0, -1)
-	local footer_start = #M.changed_files + 3
+	local extra_lines = M.ignored_count > 0 and 2 or 0
+	local footer_start = #M.changed_files + 3 + extra_lines
+	if M.ignored_count > 0 then
+		local hint_line_idx = #M.changed_files + 3
+		vim.api.nvim_buf_add_highlight(M.dialog_bufnr, -1, "Comment", hint_line_idx, 0, -1)
+	end
 	vim.api.nvim_buf_add_highlight(M.dialog_bufnr, -1, "VibeDialogFooter", footer_start, 0, -1)
 	vim.api.nvim_buf_add_highlight(M.dialog_bufnr, -1, "VibeDialogFooter", footer_start + 1, 0, -1)
 end
