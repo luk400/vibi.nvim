@@ -218,7 +218,19 @@ function M.render()
 		lines,
 		"────────────────────────────────────────"
 	)
-	table.insert(lines, "<CR> view  |  <leader>a accept  |  <leader>r reject  |  A accept all  |  q back")
+	local function dialog_key(desc, fallback)
+		local maps = vim.api.nvim_buf_get_keymap(M.dialog_bufnr, "n")
+		for _, map in ipairs(maps) do
+			if map.desc == desc then
+				local kd = require("vibe.review.keymap_display")
+				return kd.format_key_display(map.lhs)
+			end
+		end
+		return fallback
+	end
+	local k_accept = dialog_key("Accept file", "<leader>a")
+	local k_reject = dialog_key("Reject file", "<leader>r")
+	table.insert(lines, string.format("<CR> view  |  %s accept  |  %s reject  |  A accept all  |  q back", k_accept, k_reject))
 
 	vim.bo[M.dialog_bufnr].modifiable = true
 	vim.api.nvim_buf_set_lines(M.dialog_bufnr, 0, -1, false, lines)
@@ -301,7 +313,7 @@ function M.setup_keymaps()
 		git.sync_resolved_file(M.current_worktree_path, file, (info and info.repo_root or "") .. "/" .. file)
 		vim.notify("[Vibe] File accepted: " .. file, vim.log.levels.INFO)
 		M.refresh()
-	end, opts)
+	end, vim.tbl_extend("force", opts, { desc = "Accept file" }))
 
 	-- File-level reject: keep user version, mark all hunks addressed
 	vim.keymap.set("n", "<leader>r", function()
@@ -322,7 +334,7 @@ function M.setup_keymaps()
 		git.sync_resolved_file(M.current_worktree_path, file, (info and info.repo_root or "") .. "/" .. file)
 		vim.notify("[Vibe] File rejected: " .. file, vim.log.levels.INFO)
 		M.refresh()
-	end, opts)
+	end, vim.tbl_extend("force", opts, { desc = "Reject file" }))
 
 	local function back_to_review()
 		M.close()

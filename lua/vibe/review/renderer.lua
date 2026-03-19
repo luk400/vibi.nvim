@@ -8,6 +8,7 @@ local engine = require("vibe.review.engine")
 local types = require("vibe.review.types")
 local util = require("vibe.util")
 local config = require("vibe.config")
+local kd = require("vibe.review.keymap_display")
 
 local M = {}
 
@@ -84,42 +85,47 @@ local function get_sign_name(classification)
 end
 
 --- Build collapsed text for a review item
-local function build_collapse_text(item_num, total, region)
+local function build_collapse_text(item_num, total, region, bufnr)
 	local cls = region.classification
 	local user_count = #(region.user_lines or {})
 	local ai_count = #(region.ai_lines or {})
 
+	local k_accept = kd.get_key_or_fallback(bufnr, kd.DESC_ACCEPT, "<leader>a")
+	local k_reject = kd.get_key_or_fallback(bufnr, kd.DESC_REJECT, "<leader>r")
+	local k_keep = kd.get_key_or_fallback(bufnr, kd.DESC_KEEP_YOURS, "<leader>k")
+	local k_edit = kd.get_key_or_fallback(bufnr, kd.DESC_EDIT, "<leader>e")
+
 	if cls == types.USER_ONLY then
 		return string.format(
-			"[Your change %d/%d] %d lines modified -- (a)ccept (r)eject",
-			item_num, total, user_count
+			"[Your change %d/%d] %d lines modified -- %s accept  %s reject",
+			item_num, total, user_count, k_accept, k_reject
 		)
 	elseif cls == types.AI_ONLY then
 		return string.format(
-			"[AI suggestion %d/%d] %d lines -- (a)ccept (r)eject",
-			item_num, total, ai_count
+			"[AI suggestion %d/%d] %d lines -- %s accept  %s reject",
+			item_num, total, ai_count, k_accept, k_reject
 		)
 	elseif cls == types.CONVERGENT then
 		return string.format(
-			"[Both agree %d/%d] %d lines -- (a)ccept (r)eject",
-			item_num, total, user_count
+			"[Both agree %d/%d] %d lines -- %s accept  %s reject",
+			item_num, total, user_count, k_accept, k_reject
 		)
 	elseif cls == types.CONFLICT then
 		local ct = region.conflict_type or types.MOD_VS_MOD
 		if ct == types.MOD_VS_DEL then
 			return string.format(
-				"[Conflict %d/%d] %d yours vs deletion -- (u)keep (d)elete (e)dit",
-				item_num, total, user_count
+				"[Conflict %d/%d] %d yours vs deletion -- %s keep  %s AI  %s edit",
+				item_num, total, user_count, k_keep, k_accept, k_edit
 			)
 		elseif ct == types.DEL_VS_MOD then
 			return string.format(
-				"[Conflict %d/%d] deletion vs %d AI -- (d)elete (a)keep (e)dit",
-				item_num, total, ai_count
+				"[Conflict %d/%d] deletion vs %d AI -- %s keep  %s AI  %s edit",
+				item_num, total, ai_count, k_keep, k_accept, k_edit
 			)
 		else
 			return string.format(
-				"[Conflict %d/%d] %d yours, %d AI -- (u)yours (a)AI (e)dit",
-				item_num, total, user_count, ai_count
+				"[Conflict %d/%d] %d yours, %d AI -- %s yours  %s AI  %s edit",
+				item_num, total, user_count, ai_count, k_keep, k_accept, k_edit
 			)
 		end
 	end
@@ -191,10 +197,10 @@ function M.show_file(worktree_path, filepath, hunks, merge_mode)
 	}
 
 	M.setup_highlights()
+	M.setup_keymaps(bufnr)
 	M.collapse_review_items(bufnr)
 	M.highlight_auto_merged(bufnr)
 	M.setup_tracking(bufnr)
-	M.setup_keymaps(bufnr)
 
 	if #review_items > 0 then
 		local first_line = get_current_line(bufnr, 1) or 0
@@ -391,7 +397,7 @@ function M.collapse_review_items(bufnr)
 		}
 
 		-- Build collapse text
-		local collapse_text = build_collapse_text(i, total_items, region)
+		local collapse_text = build_collapse_text(i, total_items, region, bufnr)
 
 		-- Replace the region with collapsed line (0-indexed for API)
 		local api_start = user_start - 1
@@ -547,9 +553,16 @@ function M.show_preview()
 	local preview_lines = {}
 	local hl_ranges = {} -- {line_idx, hl_group}
 
+	local k_keep = kd.get_key_or_fallback(bufnr, kd.DESC_KEEP_YOURS, "<leader>k")
+	local k_accept = kd.get_key_or_fallback(bufnr, kd.DESC_ACCEPT, "<leader>a")
+	local k_reject = kd.get_key_or_fallback(bufnr, kd.DESC_REJECT, "<leader>r")
+	local k_edit = kd.get_key_or_fallback(bufnr, kd.DESC_EDIT, "<leader>e")
+	local k_quit = kd.get_key_or_fallback(bufnr, kd.DESC_QUIT, "q")
+
 	if cls == types.CONFLICT then
 		-- Keybindings header (at top, always visible)
-		table.insert(preview_lines, "── [u] yours  [a] AI  [e] edit  [q] close ──")
+		local header = string.format("── [%s] yours  [%s] AI  [%s] edit  [%s] close ──", k_keep, k_accept, k_edit, k_quit)
+		table.insert(preview_lines, header)
 		table.insert(hl_ranges, { #preview_lines, "VibePreviewKeymap" })
 		table.insert(preview_lines, "")
 
@@ -579,7 +592,8 @@ function M.show_preview()
 		end
 	else
 		-- Keybindings header (at top, always visible)
-		table.insert(preview_lines, "── [a] accept  [r] reject  [q] close ──")
+		local header = string.format("── [%s] accept  [%s] reject  [%s] close ──", k_accept, k_reject, k_quit)
+		table.insert(preview_lines, header)
 		table.insert(hl_ranges, { #preview_lines, "VibePreviewKeymap" })
 		table.insert(preview_lines, "")
 
@@ -653,7 +667,9 @@ function M.show_preview()
 
 	-- If content overflows, update header with scroll hint
 	if needs_scroll then
-		local scroll_hint = "  [C-d/C-u scroll]"
+		local k_sd = kd.get_key_or_fallback(bufnr, kd.DESC_SCROLL_DOWN, "<leader>d")
+		local k_su = kd.get_key_or_fallback(bufnr, kd.DESC_SCROLL_UP, "<leader>u")
+		local scroll_hint = string.format("  [%s/%s scroll]", k_sd, k_su)
 		local updated_header = preview_lines[1] .. scroll_hint
 		vim.bo[M.preview_bufnr].modifiable = true
 		vim.api.nvim_buf_set_lines(M.preview_bufnr, 0, 1, false, { updated_header })

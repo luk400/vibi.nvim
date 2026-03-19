@@ -3,27 +3,29 @@ local util = require("vibe.util")
 
 local M = {}
 
+--- Determine the current UI context and the associated buffer
+---@return string context, integer|nil bufnr
 local function get_context()
 	local bufnr = vim.api.nvim_get_current_buf()
 	local ft = vim.bo[bufnr].filetype
 
 	if ft == "vibe" then
-		return "terminal"
+		return "terminal", bufnr
 	end
 
 	local renderer = require("vibe.review.renderer")
 	if renderer.buffer_state[bufnr] then
-		return "review"
+		return "review", bufnr
 	end
 
 	if ft == "vibe_dialog" then
-		return "dialog"
+		return "dialog", bufnr
 	end
 
-	return "normal"
+	return "normal", bufnr
 end
 
-local function get_help_lines(context)
+local function get_help_lines(context, bufnr)
 	local lines = { " Vibe Help", " " .. string.rep("─", 50), "" }
 
 	if context == "terminal" then
@@ -34,21 +36,28 @@ local function get_help_lines(context)
 		table.insert(lines, "  q / <Esc>     Close window (normal mode)")
 		table.insert(lines, "  <M-h/j/k/l>  Navigate windows")
 	elseif context == "review" then
+		local kd = require("vibe.review.keymap_display")
+		local function k(desc, fb)
+			return kd.get_key_or_fallback(bufnr, desc, fb)
+		end
+
 		table.insert(lines, " Review Mode:")
 		table.insert(lines, "")
 		table.insert(lines, " Suggestions (your change / AI suggestion / both agree):")
-		table.insert(lines, "  a             Accept change")
-		table.insert(lines, "  r             Reject change (keep base)")
+		table.insert(lines, string.format("  %-14s Accept change", k(kd.DESC_ACCEPT, "<leader>a")))
+		table.insert(lines, string.format("  %-14s Reject change (keep base)", k(kd.DESC_REJECT, "<leader>r")))
 		table.insert(lines, "")
 		table.insert(lines, " Conflicts:")
-		table.insert(lines, "  u             Keep your version")
-		table.insert(lines, "  a             Keep AI version")
-		table.insert(lines, "  e             Edit manually")
+		table.insert(lines, string.format("  %-14s Keep your version", k(kd.DESC_KEEP_YOURS, "<leader>k")))
+		table.insert(lines, string.format("  %-14s Keep AI version", k(kd.DESC_ACCEPT, "<leader>a")))
+		table.insert(lines, string.format("  %-14s Edit manually", k(kd.DESC_EDIT, "<leader>e")))
 		table.insert(lines, "")
 		table.insert(lines, " Navigation:")
-		table.insert(lines, "  ]c            Next item")
-		table.insert(lines, "  [c            Previous item")
-		table.insert(lines, "  q/<Esc>       Quit review")
+		table.insert(lines, string.format("  %-14s Next item", k(kd.DESC_NEXT, "]c")))
+		table.insert(lines, string.format("  %-14s Previous item", k(kd.DESC_PREV, "[c")))
+		table.insert(lines, string.format("  %-14s Scroll preview down", k(kd.DESC_SCROLL_DOWN, "<leader>d")))
+		table.insert(lines, string.format("  %-14s Scroll preview up", k(kd.DESC_SCROLL_UP, "<leader>u")))
+		table.insert(lines, string.format("  %-14s Quit review", k(kd.DESC_QUIT, "q")))
 		table.insert(lines, "  :VibeAcceptAll  Accept all items")
 	elseif context == "dialog" then
 		table.insert(lines, " File Dialog:")
@@ -85,16 +94,16 @@ local function get_help_lines(context)
 end
 
 function M.show()
-	local context = get_context()
-	local lines = get_help_lines(context)
+	local context, bufnr = get_context()
+	local lines = get_help_lines(context, bufnr)
 
-	local bufnr, _, _ = util.create_centered_float({
+	local help_bufnr, _, _ = util.create_centered_float({
 		lines = lines,
 		filetype = "vibe_help",
 		min_width = 60,
 		title = "Vibe Help",
 	})
-	vim.api.nvim_buf_add_highlight(bufnr, -1, "Title", 0, 0, -1)
+	vim.api.nvim_buf_add_highlight(help_bufnr, -1, "Title", 0, 0, -1)
 end
 
 return M
