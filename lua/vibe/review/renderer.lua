@@ -34,7 +34,7 @@ function M.setup_highlights()
 	vim.api.nvim_set_hl(0, "VibeRegionConvergentBg", { bg = "#1a3a1a", default = true })
 
 	-- Conflict (red)
-	vim.api.nvim_set_hl(0, "VibeRegionConflict", { fg = "#FF6B6B", bg = "#3a1a1a", bold = true, default = true })
+	vim.api.nvim_set_hl(0, "VibeRegionConflictBg", { bg = "#3a1a1a", default = true })
 
 	-- Auto-merged (subtle)
 	vim.api.nvim_set_hl(0, "VibeRegionAutoMerged", { bg = "#1a2a1a", default = true })
@@ -50,10 +50,10 @@ function M.setup_highlights()
 	vim.api.nvim_set_hl(0, "VibePreviewBase", { fg = "#868E96", default = true })
 	vim.api.nvim_set_hl(0, "VibePreviewKeymap", { fg = "#74C0FC", bold = true, default = true })
 
-	-- Collapsed line highlights
-	vim.api.nvim_set_hl(0, "VibeConflictCollapsed", { bg = "#3a1a1a", fg = "#FF6B6B", bold = true, default = true })
-	vim.api.nvim_set_hl(0, "VibeSuggestionCollapsed", { bg = "#1a2a3a", fg = "#74C0FC", bold = true, default = true })
-	vim.api.nvim_set_hl(0, "VibeConvergentCollapsed", { bg = "#1a3a1a", fg = "#69DB7C", bold = true, default = true })
+	-- Inline display highlights (background-only for code readability)
+	vim.api.nvim_set_hl(0, "VibeConflictInline", { bg = "#3a1a1a", default = true })
+	vim.api.nvim_set_hl(0, "VibeSuggestionInline", { bg = "#1a2a3a", default = true })
+	vim.api.nvim_set_hl(0, "VibeConvergentInline", { bg = "#1a3a1a", default = true })
 
 	-- Sign definitions
 	vim.fn.sign_define("VibeReviewConflict", { text = "!", texthl = "ErrorMsg" })
@@ -61,23 +61,26 @@ function M.setup_highlights()
 	vim.fn.sign_define("VibeReviewConvergent", { text = "=", texthl = "String" })
 end
 
---- Get the current extmark line for a review item
-local function get_current_line(bufnr, idx)
-	local marks = vim.api.nvim_buf_get_extmark_by_id(bufnr, M.ns, idx * 1000, {})
-	if marks and #marks > 0 then
-		return marks[1]
+--- Get the current extmark range for a review item
+--- Returns (start_row, end_row) where end_row is exclusive (0-indexed)
+local function get_current_range(bufnr, idx)
+	local mark = vim.api.nvim_buf_get_extmark_by_id(bufnr, M.ns, idx * 1000, { details = true })
+	if mark and #mark > 0 then
+		local start_row = mark[1]
+		local end_row = (mark[3] and mark[3].end_row) or (start_row + 1)
+		return start_row, end_row
 	end
-	return nil
+	return nil, nil
 end
 
---- Get highlight group for a classification
-local function get_collapsed_hl(classification)
+--- Get highlight group for inline display
+local function get_inline_hl(classification)
 	if classification == types.CONFLICT then
-		return "VibeConflictCollapsed"
+		return "VibeConflictInline"
 	elseif classification == types.CONVERGENT then
-		return "VibeConvergentCollapsed"
+		return "VibeConvergentInline"
 	else
-		return "VibeSuggestionCollapsed"
+		return "VibeSuggestionInline"
 	end
 end
 
@@ -90,54 +93,6 @@ local function get_sign_name(classification)
 	else
 		return "VibeReviewSuggestion"
 	end
-end
-
---- Build collapsed text for a review item
-local function build_collapse_text(item_num, total, region, bufnr)
-	local cls = region.classification
-	local user_count = #(region.user_lines or {})
-	local ai_count = #(region.ai_lines or {})
-
-	local k_accept = kd.get_key_or_fallback(bufnr, kd.DESC_ACCEPT, "<leader>a")
-	local k_reject = kd.get_key_or_fallback(bufnr, kd.DESC_REJECT, "<leader>r")
-	local k_keep = kd.get_key_or_fallback(bufnr, kd.DESC_KEEP_YOURS, "<leader>k")
-	local k_edit = kd.get_key_or_fallback(bufnr, kd.DESC_EDIT, "<leader>e")
-
-	if cls == types.USER_ONLY then
-		return string.format(
-			"[Your change %d/%d] %d lines modified -- %s accept  %s reject",
-			item_num, total, user_count, k_accept, k_reject
-		)
-	elseif cls == types.AI_ONLY then
-		return string.format(
-			"[AI suggestion %d/%d] %d lines -- %s accept  %s reject",
-			item_num, total, ai_count, k_accept, k_reject
-		)
-	elseif cls == types.CONVERGENT then
-		return string.format(
-			"[Both agree %d/%d] %d lines -- %s accept  %s reject",
-			item_num, total, user_count, k_accept, k_reject
-		)
-	elseif cls == types.CONFLICT then
-		local ct = region.conflict_type or types.MOD_VS_MOD
-		if ct == types.MOD_VS_DEL then
-			return string.format(
-				"[Conflict %d/%d] %d yours vs deletion -- %s keep  %s AI  %s edit",
-				item_num, total, user_count, k_keep, k_accept, k_edit
-			)
-		elseif ct == types.DEL_VS_MOD then
-			return string.format(
-				"[Conflict %d/%d] deletion vs %d AI -- %s keep  %s AI  %s edit",
-				item_num, total, ai_count, k_keep, k_accept, k_edit
-			)
-		else
-			return string.format(
-				"[Conflict %d/%d] %d yours, %d AI -- %s yours  %s AI  %s edit",
-				item_num, total, user_count, ai_count, k_keep, k_accept, k_edit
-			)
-		end
-	end
-	return string.format("[Region %d/%d]", item_num, total)
 end
 
 --- Show file with unified classification-aware review
@@ -214,7 +169,7 @@ function M.show_file(worktree_path, filepath, hunks, merge_mode)
 	M.setup_highlights()
 	M.setup_keymaps(bufnr)
 	M.highlight_auto_merged(bufnr)
-	M.collapse_review_items(bufnr)
+	M.setup_inline_review_items(bufnr)
 	M.setup_tracking(bufnr)
 
 	-- Show hint whenever there are auto_items
@@ -223,7 +178,8 @@ function M.show_file(worktree_path, filepath, hunks, merge_mode)
 	end
 
 	if #review_items > 0 then
-		local first_line = get_current_line(bufnr, 1) or 0
+		local first_start = get_current_range(bufnr, 1)
+		local first_line = first_start or 0
 		vim.api.nvim_win_set_cursor(0, { first_line + 1, 0 })
 		vim.defer_fn(function()
 			M.show_preview()
@@ -328,11 +284,20 @@ function M._build_resolved_content(state)
 	for _, region in ipairs(sorted_regions) do
 		local rstart = region.base_range[1]
 		local rend = region.base_range[2]
+		local is_pure_insert = #(region.base_lines or {}) == 0
 
 		-- Add unchanged lines before this region
-		while base_pos < rstart do
-			table.insert(result, snapshot_lines[base_pos] or "")
-			base_pos = base_pos + 1
+		if is_pure_insert then
+			-- Include the anchor line BEFORE inserting new content
+			while base_pos <= rstart do
+				table.insert(result, snapshot_lines[base_pos] or "")
+				base_pos = base_pos + 1
+			end
+		else
+			while base_pos < rstart do
+				table.insert(result, snapshot_lines[base_pos] or "")
+				base_pos = base_pos + 1
+			end
 		end
 
 		-- Determine what lines to use for this region
@@ -355,8 +320,8 @@ function M._build_resolved_content(state)
 			table.insert(result, line)
 		end
 
-		-- Skip the base lines covered by this region
-		if rstart <= rend then
+		-- Skip the base lines covered by this region (NOT for pure insertions)
+		if not is_pure_insert and rstart <= rend then
 			base_pos = rend + 1
 		end
 	end
@@ -370,92 +335,99 @@ function M._build_resolved_content(state)
 	return result
 end
 
---- Collapse review items into single-line summaries in the buffer
-function M.collapse_review_items(bufnr)
+--- Set up inline review items in the buffer (replaces collapsed single-line summaries)
+--- Shows full content inline with highlights instead of collapsed lines
+function M.setup_inline_review_items(bufnr)
 	local state = M.buffer_state[bufnr]
 	if not state or #state.review_items == 0 then
 		return
 	end
 
-	-- We need to find where each review item's region appears in the current buffer
-	-- The buffer contains the user's file content. Review items correspond to
-	-- regions that the user has in their file. We need to map base_range to buffer lines.
-
-	-- For simplicity, we'll use the base_range to find the corresponding user lines
-	-- in the buffer. Since the buffer starts as user_lines, and user's changes may have
-	-- shifted line numbers relative to base, we need a mapping.
-
-	-- Compute user line offsets from base using vim.diff
+	-- Map base line numbers to current buffer positions
 	local snapshot_lines = git.get_worktree_snapshot_lines(state.worktree_path, state.filepath)
 	local current_lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-
-	-- Build a map: base line -> current buffer line (may differ from original_lines
-	-- when AI_ONLY auto-merged changes have been applied)
 	local base_to_user = M._build_line_map(snapshot_lines, current_lines)
 
-	local total_items = #state.review_items
 	local total_shift = 0
 
 	for i, region in ipairs(state.review_items) do
 		local rstart = region.base_range[1]
-		local rend = region.base_range[2]
-
-		-- Map base range to user buffer lines
-		local user_start = (base_to_user[rstart] or rstart) + total_shift
-		local user_end
-
-		-- Figure out how many user lines this region covers
 		local user_line_count = #(region.user_lines or {})
-		if user_line_count > 0 then
-			user_end = user_start + user_line_count - 1
+
+		-- Map base range to buffer position
+		local user_start = (base_to_user[rstart] or rstart) + total_shift
+
+		-- Determine display_lines and stored_lines based on classification
+		local display_lines, stored_lines
+		local cls = region.classification
+		if cls == types.CONFLICT then
+			display_lines = vim.deepcopy(region.ai_lines or {})
+			stored_lines = vim.deepcopy(region.user_lines or {})
+		elseif cls == types.USER_ONLY then
+			display_lines = vim.deepcopy(region.user_lines or {})
+			stored_lines = vim.deepcopy(region.base_lines or {})
+		elseif cls == types.AI_ONLY then
+			display_lines = vim.deepcopy(region.ai_lines or {})
+			stored_lines = vim.deepcopy(region.base_lines or {})
+		else -- CONVERGENT
+			display_lines = vim.deepcopy(region.user_lines or {})
+			stored_lines = vim.deepcopy(region.base_lines or {})
+		end
+
+		-- Handle empty display_lines (e.g., AI deleted something in a conflict)
+		if #display_lines == 0 then
+			display_lines = { "  (deleted this section)" }
+		end
+
+		-- Replace buffer lines at the mapped position
+		local is_pure_insert = #(region.base_lines or {}) == 0 and user_line_count == 0
+		local api_start
+		if is_pure_insert then
+			api_start = user_start -- insert AFTER anchor (user_start is 1-indexed = correct 0-indexed position after anchor)
 		else
-			user_end = user_start - 1 -- zero-width (deletion)
+			api_start = user_start - 1 -- convert to 0-indexed
+		end
+		local api_end
+		if user_line_count > 0 then
+			api_end = api_start + user_line_count
+		else
+			api_end = api_start -- insertion point
 		end
 
-		-- Store the original content
-		local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-		local content_lines = {}
-		for li = user_start, math.min(user_end, #lines) do
-			table.insert(content_lines, lines[li] or "")
-		end
-		state.item_contents[i] = {
-			original_lines = content_lines,
-			region = region,
-			buffer_start = user_start, -- 1-indexed
-		}
-
-		-- Build collapse text
-		local collapse_text = build_collapse_text(i, total_items, region, bufnr)
-
-		-- Replace the region with collapsed line (0-indexed for API)
-		local api_start = user_start - 1
-		local api_end = math.max(user_start - 1, user_end)
 		local line_count = vim.api.nvim_buf_line_count(bufnr)
 		api_start = math.max(0, math.min(api_start, line_count))
 		api_end = math.max(api_start, math.min(api_end, line_count))
-		if user_line_count == 0 then
-			-- Insertion point: insert a line at this position
-			vim.api.nvim_buf_set_lines(bufnr, api_start, api_start, false, { collapse_text })
-			total_shift = total_shift + 1
-		else
-			vim.api.nvim_buf_set_lines(bufnr, api_start, api_end, false, { collapse_text })
-			total_shift = total_shift + (1 - user_line_count)
-		end
 
-		-- Add extmark and sign
+		vim.api.nvim_buf_set_lines(bufnr, api_start, api_end, false, display_lines)
+
+		-- Update total_shift
+		total_shift = total_shift + (#display_lines - user_line_count)
+
+		-- Place ranged extmark spanning all display lines
 		local sign_id = i * 1000
-		local hl_group = get_collapsed_hl(region.classification)
+		local hl_group = get_inline_hl(region.classification)
 		local sign_name = get_sign_name(region.classification)
-
 		pcall(vim.fn.sign_place, sign_id, "vibe_review", sign_name, bufnr, { lnum = api_start + 1 })
+
 		line_count = vim.api.nvim_buf_line_count(bufnr)
-		api_start = math.max(0, math.min(api_start, line_count - 1))
-		pcall(vim.api.nvim_buf_set_extmark, bufnr, M.ns, api_start, 0, {
+		local extmark_start = math.max(0, math.min(api_start, line_count - 1))
+		local extmark_end = math.max(extmark_start + 1, math.min(api_start + #display_lines, line_count))
+
+		pcall(vim.api.nvim_buf_set_extmark, bufnr, M.ns, extmark_start, 0, {
 			id = sign_id,
-			end_col = #collapse_text,
+			end_row = extmark_end,
 			hl_group = hl_group,
+			hl_eol = true,
 			priority = 200,
 		})
+		-- Store item contents
+		state.item_contents[i] = {
+			display_lines = display_lines,
+			stored_lines = stored_lines,
+			region = region,
+			buffer_start = user_start, -- 1-indexed
+			buffer_line_count = #display_lines,
+		}
 
 		region._extmark_idx = i
 		region._resolved = false
@@ -592,11 +564,11 @@ function M.get_item_at_cursor(bufnr)
 		return nil, nil
 	end
 
-	local cursor_line = vim.api.nvim_win_get_cursor(0)[1] - 1
+	local cursor_line = vim.api.nvim_win_get_cursor(0)[1] - 1 -- 0-indexed
 	for i, region in ipairs(state.review_items) do
 		if not region._resolved then
-			local line = get_current_line(bufnr, i)
-			if line and cursor_line == line then
+			local start_row, end_row = get_current_range(bufnr, i)
+			if start_row and cursor_line >= start_row and cursor_line < end_row then
 				return region, i
 			end
 		end
@@ -628,6 +600,11 @@ function M.show_preview()
 		M.close_preview()
 		return
 	end
+	-- Avoid re-opening preview when cursor moves within the same region
+	if state._last_preview_idx == idx and M.is_preview_visible() then
+		return
+	end
+	state._last_preview_idx = idx
 
 	M.close_preview()
 
@@ -645,16 +622,17 @@ function M.show_preview()
 	local k_quit = kd.get_key_or_fallback(bufnr, kd.DESC_QUIT, "q")
 
 	if cls == types.CONFLICT then
-		-- Keybindings header (at top, always visible)
+		-- Conflict: show keybinds + user's version (AI content is already in buffer)
 		local header = string.format("── [%s] yours  [%s] AI  [%s] edit  [%s] close ──", k_keep, k_accept, k_edit, k_quit)
 		table.insert(preview_lines, header)
 		table.insert(hl_ranges, { #preview_lines, "VibePreviewKeymap" })
 		table.insert(preview_lines, "")
 
-		table.insert(preview_lines, "━━━━━━━━━ Yours ━━━━━━━━━")
+		table.insert(preview_lines, "━━━━━━━━━ Your version ━━━━━━━━━")
 		table.insert(hl_ranges, { #preview_lines, "VibePreviewUser" })
-		if #(region.user_lines or {}) > 0 then
-			for _, line in ipairs(region.user_lines) do
+		local user_lines = state.item_contents[idx] and state.item_contents[idx].stored_lines or region.user_lines or {}
+		if #user_lines > 0 then
+			for _, line in ipairs(user_lines) do
 				table.insert(preview_lines, line)
 				table.insert(hl_ranges, { #preview_lines, "VibePreviewUser" })
 			end
@@ -662,62 +640,11 @@ function M.show_preview()
 			table.insert(preview_lines, "(empty / deleted)")
 			table.insert(hl_ranges, { #preview_lines, "VibePreviewBase" })
 		end
-
-		table.insert(preview_lines, "")
-		table.insert(preview_lines, "━━━━━━━━━━ AI ━━━━━━━━━━")
-		table.insert(hl_ranges, { #preview_lines, "VibePreviewAI" })
-		if #(region.ai_lines or {}) > 0 then
-			for _, line in ipairs(region.ai_lines) do
-				table.insert(preview_lines, line)
-				table.insert(hl_ranges, { #preview_lines, "VibePreviewAI" })
-			end
-		else
-			table.insert(preview_lines, "(empty / deleted)")
-			table.insert(hl_ranges, { #preview_lines, "VibePreviewBase" })
-		end
 	else
-		-- Keybindings header (at top, always visible)
+		-- Suggestions: keybinds only (content already visible inline)
 		local header = string.format("── [%s] accept  [%s] reject  [%s] close ──", k_accept, k_reject, k_quit)
 		table.insert(preview_lines, header)
 		table.insert(hl_ranges, { #preview_lines, "VibePreviewKeymap" })
-		table.insert(preview_lines, "")
-
-		-- Suggestion preview
-		table.insert(preview_lines, "━━━━━━━━━ Base ━━━━━━━━━")
-		table.insert(hl_ranges, { #preview_lines, "VibePreviewBase" })
-		if #(region.base_lines or {}) > 0 then
-			for _, line in ipairs(region.base_lines) do
-				table.insert(preview_lines, line)
-				table.insert(hl_ranges, { #preview_lines, "VibePreviewBase" })
-			end
-		else
-			table.insert(preview_lines, "(new content)")
-			table.insert(hl_ranges, { #preview_lines, "VibePreviewBase" })
-		end
-
-		table.insert(preview_lines, "")
-		local change_label
-		if cls == types.USER_ONLY then
-			change_label = "━━━━━ Your version ━━━━━"
-		elseif cls == types.AI_ONLY then
-			change_label = "━━━━━ AI version ━━━━━━"
-		else
-			change_label = "━━━━ Agreed change ━━━━"
-		end
-		table.insert(preview_lines, change_label)
-
-		local change_lines = (cls == types.AI_ONLY) and region.ai_lines or region.user_lines
-		local change_hl = (cls == types.AI_ONLY) and "VibePreviewAI" or "VibePreviewUser"
-		table.insert(hl_ranges, { #preview_lines, change_hl })
-		if #(change_lines or {}) > 0 then
-			for _, line in ipairs(change_lines) do
-				table.insert(preview_lines, line)
-				table.insert(hl_ranges, { #preview_lines, change_hl })
-			end
-		else
-			table.insert(preview_lines, "(deleted)")
-			table.insert(hl_ranges, { #preview_lines, "VibePreviewBase" })
-		end
 	end
 
 	-- Create preview buffer
@@ -730,7 +657,14 @@ function M.show_preview()
 	local win_height = vim.api.nvim_win_get_height(0)
 	local width = math.max(60, math.floor(win_width * 0.8))
 	local height = math.min(#preview_lines + 2, math.max(20, math.floor(win_height * 0.7)))
-	local needs_scroll = (#preview_lines + 2) > height
+
+	-- For suggestions (keybinds only), use a smaller window
+	if cls ~= types.CONFLICT then
+		width = math.min(width, math.max(60, #preview_lines[1] + 4))
+		height = math.min(#preview_lines + 2, 5)
+		needs_scroll = false
+	end
+
 	local row = math.max(0, math.floor((win_height - height) / 2))
 	local col = math.max(0, math.floor((win_width - width) / 2))
 
@@ -813,35 +747,35 @@ function M.resolve_item(resolution)
 		return false
 	end
 
-	-- For "edit_manually", open the edit float
+	-- For "edit_manually", insert conflict markers inline
 	if resolution == "edit_manually" then
-		M.open_edit_float(bufnr, region, idx)
+		M.open_edit_inline(bufnr, region, idx)
 		return true
 	end
 
-	local replacement_lines = resolve.get_replacement_for_region(region.classification, resolution, region)
-	if not replacement_lines then
+	local start_row, end_row = get_current_range(bufnr, idx)
+	if not start_row then
 		return false
 	end
 
-	local item_line = get_current_line(bufnr, idx)
-	if not item_line then
-		return false
-	end
-
-	-- Use undojoin so resolution can be undone with 'u' key... wait, 'u' is mapped.
-	-- Use pcall to avoid error if this is the first change
 	pcall(vim.cmd, "undojoin")
 
 	-- Remove extmark and sign
 	pcall(vim.api.nvim_buf_del_extmark, bufnr, M.ns, idx * 1000)
 	pcall(vim.fn.sign_unplace, "vibe_review", { buffer = bufnr, id = idx * 1000 })
 
-	-- Replace collapsed line with resolved content
-	vim.api.nvim_buf_set_lines(bufnr, item_line, item_line + 1, false, replacement_lines)
+	local is_accept = (resolution == "keep_ai" or resolution == "accept")
+
+	if is_accept then
+		-- Content is already in buffer, just remove highlights (extmark already deleted above)
+	else
+		-- Replace displayed range with stored_lines (keep_user / reject)
+		local stored_lines = state.item_contents[idx] and state.item_contents[idx].stored_lines or {}
+		vim.api.nvim_buf_set_lines(bufnr, start_row, end_row, false, stored_lines)
+	end
 
 	region._resolved = true
-	state.resolved_count = state.resolved_count + 1
+	state._last_preview_idx = nil
 
 	-- Mark as addressed
 	local action = resolve.resolution_to_action_v2(region.classification, resolution)
@@ -858,11 +792,16 @@ function M.resolve_item(resolution)
 	return true
 end
 
---- Open edit-manually float for a conflict
-function M.open_edit_float(bufnr, region, idx)
+--- Insert conflict markers inline for manual editing
+function M.open_edit_inline(bufnr, region, idx)
 	M.close_preview()
 
-	-- Build initial content with both sides
+	local start_row, end_row = get_current_range(bufnr, idx)
+	if not start_row then
+		return
+	end
+
+	-- Build conflict marker lines
 	local edit_lines = {}
 	table.insert(edit_lines, "<<<<<<< YOURS")
 	for _, line in ipairs(region.user_lines or {}) do
@@ -874,85 +813,38 @@ function M.open_edit_float(bufnr, region, idx)
 	end
 	table.insert(edit_lines, ">>>>>>> AI")
 
-	-- Create scratch buffer
-	local edit_bufnr = vim.api.nvim_create_buf(false, true)
-	vim.api.nvim_buf_set_lines(edit_bufnr, 0, -1, false, edit_lines)
-	vim.bo[edit_bufnr].bufhidden = "wipe"
-	vim.bo[edit_bufnr].buftype = "nofile"
-	vim.bo[edit_bufnr].filetype = vim.bo[bufnr].filetype -- match syntax
+	pcall(vim.cmd, "undojoin")
 
-	-- Open centered float
-	local width = math.min(80, math.floor(vim.o.columns * 0.7))
-	local height = math.min(#edit_lines + 4, math.floor(vim.o.lines * 0.6))
-	local row = math.floor((vim.o.lines - height) / 2)
-	local col = math.floor((vim.o.columns - width) / 2)
+	-- Remove extmark and sign
+	pcall(vim.api.nvim_buf_del_extmark, bufnr, M.ns, idx * 1000)
+	pcall(vim.fn.sign_unplace, "vibe_review", { buffer = bufnr, id = idx * 1000 })
 
-	local edit_winid = vim.api.nvim_open_win(edit_bufnr, true, {
-		relative = "editor",
-		row = row,
-		col = col,
-		width = width,
-		height = height,
-		style = "minimal",
-		border = "rounded",
-		title = " Edit Conflict (Enter=confirm, q=cancel) ",
-		title_pos = "center",
-		zindex = 110,
-	})
+	-- Replace the region in-buffer with conflict markers
+	vim.api.nvim_buf_set_lines(bufnr, start_row, end_row, false, edit_lines)
 
-	-- Set up keymaps
-	local function confirm_edit()
-		local result_lines = vim.api.nvim_buf_get_lines(edit_bufnr, 0, -1, false)
-		-- Filter out conflict markers if user left them
-		local clean_lines = {}
-		for _, line in ipairs(result_lines) do
-			if
-				not line:match("^<<<<<<< ")
-				and not line:match("^=======$")
-				and not line:match("^>>>>>>> ")
-			then
-				table.insert(clean_lines, line)
-			end
-		end
+	-- Mark as resolved immediately (user edits at their leisure)
+	local state = M.buffer_state[bufnr]
+	if state then
+		region._resolved = true
+		state.resolved_count = state.resolved_count + 1
+		state._last_preview_idx = nil
+		M._mark_region_addressed(state, region, "accepted")
 
-		if vim.fn.confirm("Accept this resolution?", "&Yes\n&No", 2) == 1 then
-			vim.api.nvim_win_close(edit_winid, true)
-			-- Apply the edit
-			local item_line = get_current_line(bufnr, idx)
-			if item_line then
-				pcall(vim.cmd, "undojoin")
-				pcall(vim.api.nvim_buf_del_extmark, bufnr, M.ns, idx * 1000)
-				pcall(vim.fn.sign_unplace, "vibe_review", { buffer = bufnr, id = idx * 1000 })
-				vim.api.nvim_buf_set_lines(bufnr, item_line, item_line + 1, false, clean_lines)
-
-				local state = M.buffer_state[bufnr]
-				if state then
-					region._resolved = true
-					state.resolved_count = state.resolved_count + 1
-					M._mark_region_addressed(state, region, "accepted")
-
-					local remaining = M.count_remaining(bufnr)
-					if remaining == 0 then
-						M.finalize_file(bufnr)
-					else
-						M.next_item(bufnr)
-						vim.defer_fn(M.show_preview, 50)
-						vim.notify(
-							string.format("[Vibe] Conflict resolved. %d remaining", remaining),
-							vim.log.levels.INFO
-						)
-					end
-				end
-			end
+		local remaining = M.count_remaining(bufnr)
+		if remaining == 0 then
+			M.finalize_file(bufnr)
+		else
+			M.next_item(bufnr)
+			vim.defer_fn(M.show_preview, 50)
+			vim.notify(
+				string.format("[Vibe] Conflict markers inserted. %d remaining", remaining),
+				vim.log.levels.INFO
+			)
 		end
 	end
 
-	local function cancel_edit()
-		vim.api.nvim_win_close(edit_winid, true)
-	end
-
-	vim.keymap.set("n", "<CR>", confirm_edit, { buffer = edit_bufnr, silent = true })
-	vim.keymap.set("n", "q", cancel_edit, { buffer = edit_bufnr, silent = true })
+	-- Navigate cursor to the conflict markers
+	vim.api.nvim_win_set_cursor(0, { start_row + 1, 0 })
 end
 
 --- Mark a region as addressed in the hunk tracking system
@@ -993,9 +885,9 @@ function M.next_item(bufnr)
 	local cursor_line = vim.api.nvim_win_get_cursor(0)[1] - 1
 	for i, region in ipairs(state.review_items) do
 		if not region._resolved then
-			local line = get_current_line(bufnr, i)
-			if line and line > cursor_line then
-				vim.api.nvim_win_set_cursor(0, { line + 1, 0 })
+			local start_row = get_current_range(bufnr, i)
+			if start_row and start_row > cursor_line then
+				vim.api.nvim_win_set_cursor(0, { start_row + 1, 0 })
 				return
 			end
 		end
@@ -1003,9 +895,9 @@ function M.next_item(bufnr)
 	-- Wrap around
 	for i, region in ipairs(state.review_items) do
 		if not region._resolved then
-			local line = get_current_line(bufnr, i)
-			if line then
-				vim.api.nvim_win_set_cursor(0, { line + 1, 0 })
+			local start_row = get_current_range(bufnr, i)
+			if start_row then
+				vim.api.nvim_win_set_cursor(0, { start_row + 1, 0 })
 				return
 			end
 		end
@@ -1022,9 +914,9 @@ function M.prev_item(bufnr)
 	for i = #state.review_items, 1, -1 do
 		local region = state.review_items[i]
 		if not region._resolved then
-			local line = get_current_line(bufnr, i)
-			if line and line < cursor_line then
-				vim.api.nvim_win_set_cursor(0, { line + 1, 0 })
+			local start_row = get_current_range(bufnr, i)
+			if start_row and start_row < cursor_line then
+				vim.api.nvim_win_set_cursor(0, { start_row + 1, 0 })
 				return
 			end
 		end
@@ -1033,9 +925,9 @@ function M.prev_item(bufnr)
 	for i = #state.review_items, 1, -1 do
 		local region = state.review_items[i]
 		if not region._resolved then
-			local line = get_current_line(bufnr, i)
-			if line then
-				vim.api.nvim_win_set_cursor(0, { line + 1, 0 })
+			local start_row = get_current_range(bufnr, i)
+			if start_row then
+				vim.api.nvim_win_set_cursor(0, { start_row + 1, 0 })
 				return
 			end
 		end
@@ -1055,31 +947,19 @@ function M.accept_all(bufnr)
 		return
 	end
 
-	-- Resolve all remaining items from bottom to top
+	-- Accept all = keep what's in the buffer. Just remove extmarks/signs.
 	for i = #state.review_items, 1, -1 do
 		local region = state.review_items[i]
 		if not region._resolved then
-			local item_line = get_current_line(bufnr, i)
-			if item_line then
-				local resolution
-				if region.classification == types.CONFLICT then
-					resolution = "keep_ai"
-				else
-					resolution = "accept"
-				end
+			pcall(vim.api.nvim_buf_del_extmark, bufnr, M.ns, i * 1000)
+			pcall(vim.fn.sign_unplace, "vibe_review", { buffer = bufnr, id = i * 1000 })
 
-				local replacement = resolve.get_replacement_for_region(region.classification, resolution, region)
-				if replacement then
-					pcall(vim.api.nvim_buf_del_extmark, bufnr, M.ns, i * 1000)
-					pcall(vim.fn.sign_unplace, "vibe_review", { buffer = bufnr, id = i * 1000 })
-					vim.api.nvim_buf_set_lines(bufnr, item_line, item_line + 1, false, replacement)
+			region._resolved = true
+			state.resolved_count = state.resolved_count + 1
 
-					region._resolved = true
-					state.resolved_count = state.resolved_count + 1
-					local action = resolve.resolution_to_action_v2(region.classification, resolution)
-					M._mark_region_addressed(state, region, action)
-				end
-			end
+			local resolution = region.classification == types.CONFLICT and "keep_ai" or "accept"
+			local action = resolve.resolution_to_action_v2(region.classification, resolution)
+			M._mark_region_addressed(state, region, action)
 		end
 	end
 
@@ -1145,12 +1025,19 @@ function M.setup_tracking(bufnr)
 		group = group,
 		buffer = bufnr,
 		callback = function()
-			local region = M.get_item_at_cursor(bufnr)
+			local state = M.buffer_state[bufnr]
+			if not state then
+				return
+			end
+			local region, idx = M.get_item_at_cursor(bufnr)
 			if region and not region._resolved then
-				if not M.is_preview_visible() then
+				if state._last_preview_idx == idx and M.is_preview_visible() then
+					-- Same region, preview already open: do nothing
+				else
 					M.show_preview()
 				end
 			else
+				state._last_preview_idx = nil
 				M.close_preview()
 			end
 		end,
