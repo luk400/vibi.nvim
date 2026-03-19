@@ -13,12 +13,15 @@ local kd = require("vibe.review.keymap_display")
 local M = {}
 
 M.ns = vim.api.nvim_create_namespace("vibe_review")
+M.ns_auto = vim.api.nvim_create_namespace("vibe_auto_merged")
 
 ---@type table<integer, table> bufnr -> review state
 M.buffer_state = {}
 
 M.preview_winnr = nil
 M.preview_bufnr = nil
+M.hint_winnr = nil
+M.hint_bufnr = nil
 
 --- Highlight group setup
 function M.setup_highlights()
@@ -35,6 +38,11 @@ function M.setup_highlights()
 
 	-- Auto-merged (subtle)
 	vim.api.nvim_set_hl(0, "VibeRegionAutoMerged", { bg = "#1a2a1a", default = true })
+
+	-- Auto-merged visual indicators
+	vim.api.nvim_set_hl(0, "VibeAutoMergedAdd", { bg = "#1a3a1a", default = true })
+	vim.api.nvim_set_hl(0, "VibeAutoMergedDelete", { bg = "#3a1a1a", fg = "#FF6B6B", default = true })
+	vim.api.nvim_set_hl(0, "VibeAutoMergedChange", { bg = "#3a3a1a", default = true })
 
 	-- Preview sections
 	vim.api.nvim_set_hl(0, "VibePreviewUser", { fg = "#74C0FC", bold = true, default = true })
@@ -196,11 +204,23 @@ function M.show_file(worktree_path, filepath, hunks, merge_mode)
 		merged_lines = merged_lines,
 	}
 
+	-- When there are auto_items, rebuild buffer content so AI_ONLY regions
+	-- get ai_lines instead of user_lines (fixes bug where AI changes were lost on finalize)
+	if #auto_items > 0 then
+		local resolved_lines = M._build_resolved_content(M.buffer_state[bufnr])
+		vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, resolved_lines)
+	end
+
 	M.setup_highlights()
 	M.setup_keymaps(bufnr)
-	M.collapse_review_items(bufnr)
 	M.highlight_auto_merged(bufnr)
+	M.collapse_review_items(bufnr)
 	M.setup_tracking(bufnr)
+
+	-- Show hint whenever there are auto_items
+	if #auto_items > 0 then
+		M.show_hint(bufnr)
+	end
 
 	if #review_items > 0 then
 		local first_line = get_current_line(bufnr, 1) or 0
@@ -224,9 +244,16 @@ function M.show_file(worktree_path, filepath, hunks, merge_mode)
 			vim.log.levels.INFO
 		)
 	else
-		-- All auto-merged, apply and finalize
-		vim.notify("[Vibe] All changes safely auto-merged. Saving...", vim.log.levels.INFO)
-		M.apply_auto_merged_and_finalize(bufnr)
+		-- All auto-merged: show buffer with highlights, let user inspect/edit
+		local k_done = kd.get_key_or_fallback(bufnr, kd.DESC_DONE, "<leader>c")
+		vim.notify(
+			string.format(
+				"[Vibe] All %d change(s) auto-merged. Edit freely, then %s to accept.",
+				#auto_items,
+				k_done
+			),
+			vim.log.levels.INFO
+		)
 	end
 end
 
@@ -360,10 +387,11 @@ function M.collapse_review_items(bufnr)
 
 	-- Compute user line offsets from base using vim.diff
 	local snapshot_lines = git.get_worktree_snapshot_lines(state.worktree_path, state.filepath)
-	local user_lines = state.original_lines
+	local current_lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 
-	-- Build a map: base line -> user line
-	local base_to_user = M._build_line_map(snapshot_lines, user_lines)
+	-- Build a map: base line -> current buffer line (may differ from original_lines
+	-- when AI_ONLY auto-merged changes have been applied)
+	local base_to_user = M._build_line_map(snapshot_lines, current_lines)
 
 	local total_items = #state.review_items
 	local total_shift = 0
@@ -484,18 +512,75 @@ end
 --- Highlight auto-merged regions in the buffer
 function M.highlight_auto_merged(bufnr)
 	local state = M.buffer_state[bufnr]
-	if not state then
+	if not state or #state.auto_items == 0 then
 		return
 	end
 
-	-- Auto-merged regions are shown with subtle background
-	-- Since we haven't modified these regions in the buffer (they're in user's content),
-	-- we can highlight them based on their buffer positions
-	-- For now, add virtual text annotations
+	local snapshot_lines = git.get_worktree_snapshot_lines(state.worktree_path, state.filepath)
+	local current_lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+	local base_to_buf = M._build_line_map(snapshot_lines, current_lines)
+
 	for _, region in ipairs(state.auto_items) do
-		-- We'd need to know the buffer line for this region
-		-- For simplicity, add a note via extmark at estimated position
-		-- This is a best-effort annotation
+		local base_lines = region.base_lines or {}
+		local resolved_lines
+		if region.classification == types.AI_ONLY then
+			resolved_lines = region.ai_lines or {}
+		else
+			resolved_lines = region.user_lines or {}
+		end
+
+		local rstart = region.base_range[1]
+		local buf_start = base_to_buf[rstart] or rstart
+
+		if #base_lines > 0 and #resolved_lines == 0 then
+			-- Pure deletion: show deleted text as virtual lines
+			local virt_lines = {}
+			for _, line in ipairs(base_lines) do
+				table.insert(virt_lines, { { line, "VibeAutoMergedDelete" } })
+			end
+			-- Anchor at the line after the deletion point
+			local anchor = math.min(buf_start - 1, #current_lines - 1)
+			anchor = math.max(0, anchor)
+			pcall(vim.api.nvim_buf_set_extmark, bufnr, M.ns_auto, anchor, 0, {
+				virt_lines = virt_lines,
+				virt_lines_above = true,
+			})
+		elseif #base_lines == 0 and #resolved_lines > 0 then
+			-- Pure addition: highlight each added line
+			for j = 0, #resolved_lines - 1 do
+				local line_idx = buf_start - 1 + j
+				if line_idx >= 0 and line_idx < #current_lines then
+					pcall(vim.api.nvim_buf_set_extmark, bufnr, M.ns_auto, line_idx, 0, {
+						hl_group = "VibeAutoMergedAdd",
+						hl_eol = true,
+						end_row = line_idx + 1,
+					})
+				end
+			end
+		else
+			-- Modification: check if content actually differs
+			local differs = #base_lines ~= #resolved_lines
+			if not differs then
+				for k = 1, #base_lines do
+					if base_lines[k] ~= resolved_lines[k] then
+						differs = true
+						break
+					end
+				end
+			end
+			if differs then
+				for j = 0, #resolved_lines - 1 do
+					local line_idx = buf_start - 1 + j
+					if line_idx >= 0 and line_idx < #current_lines then
+						pcall(vim.api.nvim_buf_set_extmark, bufnr, M.ns_auto, line_idx, 0, {
+							hl_group = "VibeAutoMergedChange",
+							hl_eol = true,
+							end_row = line_idx + 1,
+						})
+					end
+				end
+			end
+		end
 	end
 end
 
@@ -1005,17 +1090,21 @@ end
 function M.quit(bufnr)
 	bufnr = bufnr or vim.api.nvim_get_current_buf()
 	local state = M.buffer_state[bufnr]
-	if
-		M.count_remaining(bufnr) > 0
-		and vim.fn.confirm("Unresolved item(s). Quit anyway?", "&Yes\n&No", 2) ~= 1
-	then
+	local remaining = M.count_remaining(bufnr)
+
+	if remaining > 0 and vim.fn.confirm("Unresolved item(s). Quit anyway?", "&Yes\n&No", 2) ~= 1 then
 		return
 	end
+
 	M.close_preview()
+	M.close_hint()
 	if state then
-		vim.cmd("edit!")
+		-- Restore original content (reject auto-merge changes)
+		vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, state.original_lines)
+		vim.cmd("write")
 		M.buffer_state[bufnr] = nil
 		vim.api.nvim_buf_clear_namespace(bufnr, M.ns, 0, -1)
+		vim.api.nvim_buf_clear_namespace(bufnr, M.ns_auto, 0, -1)
 		vim.fn.sign_unplace("vibe_review", { buffer = bufnr })
 	end
 	if state and state.worktree_path then
@@ -1043,8 +1132,10 @@ function M.finalize_file(bufnr)
 
 	M.buffer_state[bufnr] = nil
 	vim.api.nvim_buf_clear_namespace(bufnr, M.ns, 0, -1)
+	vim.api.nvim_buf_clear_namespace(bufnr, M.ns_auto, 0, -1)
 	vim.fn.sign_unplace("vibe_review", { buffer = bufnr })
 	M.close_preview()
+	M.close_hint()
 	util.check_remaining_files(state.worktree_path)
 end
 
@@ -1091,6 +1182,9 @@ function M.setup_keymaps(bufnr)
 		prev_item = function()
 			M.prev_item(bufnr)
 		end,
+		done = function()
+			M.finalize_file(bufnr)
+		end,
 		quit = function()
 			M.quit(bufnr)
 		end,
@@ -1106,12 +1200,63 @@ function M.setup()
 	M.setup_highlights()
 end
 
+--- Show floating hint window for accept-file keybind
+function M.show_hint(bufnr)
+	M.close_hint()
+
+	local k_done = kd.get_key_or_fallback(bufnr, kd.DESC_DONE, "<leader>c")
+	local hint_text = " " .. k_done .. "  accept file and continue "
+
+	M.hint_bufnr = vim.api.nvim_create_buf(false, true)
+	vim.api.nvim_buf_set_lines(M.hint_bufnr, 0, -1, false, { hint_text })
+	vim.bo[M.hint_bufnr].bufhidden = "wipe"
+	vim.bo[M.hint_bufnr].modifiable = false
+
+	-- Apply highlights: keybind in blue, description in Comment
+	local ns_hint = vim.api.nvim_create_namespace("vibe_hint_hl")
+	local key_end = #(" " .. k_done)
+	pcall(vim.api.nvim_buf_add_highlight, M.hint_bufnr, ns_hint, "VibePreviewKeymap", 0, 0, key_end)
+	pcall(vim.api.nvim_buf_add_highlight, M.hint_bufnr, ns_hint, "Comment", 0, key_end, -1)
+
+	local win_height = vim.api.nvim_win_get_height(0)
+	local hint_width = #hint_text
+	local row = math.max(0, win_height - 3)
+	local col = 1
+
+	M.hint_winnr = vim.api.nvim_open_win(M.hint_bufnr, false, {
+		relative = "win",
+		win = 0,
+		row = row,
+		col = col,
+		width = hint_width,
+		height = 1,
+		style = "minimal",
+		border = "rounded",
+		focusable = false,
+		zindex = 50,
+	})
+
+	if M.hint_winnr and vim.api.nvim_win_is_valid(M.hint_winnr) then
+		pcall(vim.api.nvim_win_set_option, M.hint_winnr, "winblend", 20)
+	end
+end
+
+--- Close the floating hint window
+function M.close_hint()
+	if M.hint_winnr and vim.api.nvim_win_is_valid(M.hint_winnr) then
+		vim.api.nvim_win_close(M.hint_winnr, true)
+	end
+	M.hint_winnr, M.hint_bufnr = nil, nil
+end
+
 function M.clear(bufnr)
 	bufnr = bufnr or vim.api.nvim_get_current_buf()
 	M.buffer_state[bufnr] = nil
 	vim.api.nvim_buf_clear_namespace(bufnr, M.ns, 0, -1)
+	vim.api.nvim_buf_clear_namespace(bufnr, M.ns_auto, 0, -1)
 	vim.fn.sign_unplace("vibe_review", { buffer = bufnr })
 	M.close_preview()
+	M.close_hint()
 end
 
 function M.is_review_buffer(bufnr)

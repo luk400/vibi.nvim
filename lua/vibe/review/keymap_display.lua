@@ -13,6 +13,7 @@ M.DESC_PREV = "Previous review item"
 M.DESC_SCROLL_DOWN = "Scroll preview down"
 M.DESC_SCROLL_UP = "Scroll preview up"
 M.DESC_QUIT = "Quit review"
+M.DESC_DONE = "Accept file and continue"
 
 --- Convert raw lhs (leader-expanded) back to <leader>X display form
 ---@param lhs string Raw lhs from nvim_buf_get_keymap (leader already expanded)

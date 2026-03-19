@@ -96,6 +96,11 @@ function M.setup(bufnr, handlers)
 		end
 	end, vim.tbl_extend("force", opts, { desc = kd.DESC_SCROLL_UP }))
 
+	-- Accept file and continue
+	if handlers.done then
+		vim.keymap.set("n", "<leader>c", handlers.done, vim.tbl_extend("force", opts, { desc = kd.DESC_DONE }))
+	end
+
 	-- Quit
 	vim.keymap.set("n", "q", handlers.quit, vim.tbl_extend("force", opts, { desc = kd.DESC_QUIT }))
 	vim.keymap.set("n", "<Esc>", handlers.quit, vim.tbl_extend("force", opts, { desc = kd.DESC_QUIT }))
