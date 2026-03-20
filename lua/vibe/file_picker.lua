@@ -9,6 +9,7 @@ M.bufnr = nil
 M.winid = nil
 M.current_path = ""
 M.selected_items = {}
+M.selected_dirs = {}
 M.selected_idx = 1
 M.entries = {}
 M.repo_root = nil
@@ -186,12 +187,14 @@ function M.toggle_selection(entry)
 			for _, p in ipairs(to_remove) do
 				M.selected_items[p] = nil
 			end
+			M.selected_dirs[entry.rel_path] = nil
 		else
 			local abs_dir = M.repo_root .. "/" .. entry.rel_path
 			local sub_files = enumerate_files_recursive(abs_dir, M.repo_root)
 			for _, f in ipairs(sub_files) do
 				M.selected_items[f] = true
 			end
+			M.selected_dirs[entry.rel_path] = true
 		end
 	end
 end
@@ -203,6 +206,37 @@ local function count_selected()
 		n = n + 1
 	end
 	return n
+end
+
+--- Build .vibeinclude entries from selected files and directory selections
+---@param selected_list string[] List of selected file paths
+---@param dir_selections table<string, boolean> Map of directory paths that were selected
+---@return string[] entries List of patterns for .vibeinclude
+function M.build_vibeinclude_entries(selected_list, dir_selections)
+	local entries = {}
+	local dir_set = dir_selections or {}
+
+	-- Add directory patterns
+	for dir, _ in pairs(dir_set) do
+		table.insert(entries, dir .. "/**")
+	end
+
+	-- Add individual files not covered by a directory selection
+	for _, file in ipairs(selected_list) do
+		local covered = false
+		for dir, _ in pairs(dir_set) do
+			if vim.startswith(file, dir .. "/") then
+				covered = true
+				break
+			end
+		end
+		if not covered then
+			table.insert(entries, file)
+		end
+	end
+
+	table.sort(entries)
+	return entries
 end
 
 ---@return integer
@@ -417,11 +451,65 @@ function M.setup_keymaps()
 			return
 		end
 		local worktree_path = M.worktree_path
+		local repo_root = M.repo_root
+		local dir_selections = vim.deepcopy(M.selected_dirs)
 		M.close()
 		local worktree = require("vibe.git.worktree")
 		local ok, err, copied_count = worktree.copy_files_to_active_worktree(worktree_path, selected_list)
 		if ok then
 			vim.notify(string.format("[Vibe] Copied %d file(s) to worktree", copied_count), vim.log.levels.INFO)
+			-- Prompt to add selections to .vibeinclude
+			vim.schedule(function()
+				local choice = vim.fn.confirm(
+					"[Vibe] Always copy these files when :Vibe is called?",
+					"&Yes\n&No",
+					2
+				)
+				if choice == 1 then
+					local new_entries = M.build_vibeinclude_entries(selected_list, dir_selections)
+					if #new_entries == 0 then
+						return
+					end
+
+					local vibeinclude_path = repo_root .. "/.vibeinclude"
+					local existing_lines = {}
+					local existing_set = {}
+					if vim.fn.filereadable(vibeinclude_path) == 1 then
+						existing_lines = vim.fn.readfile(vibeinclude_path)
+						for _, line in ipairs(existing_lines) do
+							local trimmed = line:gsub("^%s+", ""):gsub("%s+$", "")
+							if trimmed ~= "" and not trimmed:match("^#") then
+								existing_set[trimmed] = true
+							end
+						end
+					else
+						table.insert(existing_lines, "# Files to copy to worktree when :Vibe is called")
+						table.insert(existing_lines, "# One pattern per line (supports globs)")
+					end
+
+					local added = 0
+					for _, entry in ipairs(new_entries) do
+						if not existing_set[entry] then
+							table.insert(existing_lines, entry)
+							added = added + 1
+						end
+					end
+
+					if added > 0 then
+						vim.fn.writefile(existing_lines, vibeinclude_path)
+						vim.notify(
+							string.format(
+								"[Vibe] Added %d rule(s) to .vibeinclude (edit %s to change)",
+								added,
+								vibeinclude_path
+							),
+							vim.log.levels.INFO
+						)
+					else
+						vim.notify("[Vibe] All patterns already in .vibeinclude", vim.log.levels.INFO)
+					end
+				end
+			end)
 		else
 			vim.notify("[Vibe] Copy failed: " .. (err or "unknown error"), vim.log.levels.ERROR)
 		end
@@ -455,6 +543,7 @@ function M.show(worktree_path, repo_root)
 	M.worktree_path = worktree_path
 	M.current_path = ""
 	M.selected_items = {}
+	M.selected_dirs = {}
 	M.selected_idx = 1
 	M.git_status_map = build_git_status_map(repo_root)
 

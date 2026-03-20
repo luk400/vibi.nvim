@@ -59,7 +59,7 @@ describe("Worktree file copying", function()
 		is_true(vim.tbl_contains(files, "docs/readme.md"), "docs/readme.md should be in worktree")
 	end)
 
-	it("copies all untracked files when copy_untracked is true regardless of cwd", function()
+	it("copies untracked files matching .vibeinclude patterns regardless of cwd", function()
 		local repo_path = helpers.create_test_repo("scope-untracked", {
 			["committed.txt"] = "committed file",
 		})
@@ -67,12 +67,8 @@ describe("Worktree file copying", function()
 		helpers.write_file(repo_path .. "/src/untracked_src.txt", "untracked in src")
 		helpers.write_file(repo_path .. "/docs/untracked_docs.txt", "untracked in docs")
 
-		require("vibe.config").setup({
-			quit_protection = false,
-			worktree = {
-				copy_untracked = true,
-			},
-		})
+		-- Use .vibeinclude to specify which untracked files to copy
+		helpers.write_file(repo_path .. "/.vibeinclude", "src/**\ndocs/**")
 
 		local src_cwd = repo_path .. "/src"
 		local info, err = git.create_worktree("scope-untracked-test", src_cwd)
@@ -130,7 +126,7 @@ describe("Worktree file copying", function()
 		eq("other modified", other_content, "other/changed.js should have modified content")
 	end)
 
-	it("copies only untracked files matching patterns when configured", function()
+	it("copies only untracked files matching .vibeinclude patterns", function()
 		local repo_path = helpers.create_test_repo("scope-patterns", {
 			["main.js"] = "main content",
 		})
@@ -139,12 +135,8 @@ describe("Worktree file copying", function()
 		helpers.write_file(repo_path .. "/report.csv", "a,b,c")
 		helpers.write_file(repo_path .. "/notes.txt", "some notes")
 
-		require("vibe.config").setup({
-			quit_protection = false,
-			worktree = {
-				copy_untracked = { "*.json" },
-			},
-		})
+		-- Use .vibeinclude to only match .json files
+		helpers.write_file(repo_path .. "/.vibeinclude", "*.json")
 
 		local info, err = git.create_worktree("scope-patterns-test", repo_path)
 
@@ -187,7 +179,7 @@ describe("Worktree file copying", function()
 		is_true(vim.tbl_contains(files, "src/app.js"), "src/app.js should be in worktree")
 	end)
 
-	it("does not copy untracked files when copy_untracked is false", function()
+	it("does not copy untracked files without .vibeinclude", function()
 		local repo_path = helpers.create_test_repo("scope-false", {
 			["tracked.txt"] = "tracked content",
 			["src/app.js"] = "app content",
@@ -197,13 +189,6 @@ describe("Worktree file copying", function()
 		helpers.write_file(repo_path .. "/untracked.txt", "untracked content")
 		helpers.write_file(repo_path .. "/src/untracked.js", "untracked js")
 		helpers.write_file(repo_path .. "/lib/untracked.lua", "untracked lua")
-
-		require("vibe.config").setup({
-			quit_protection = false,
-			worktree = {
-				copy_untracked = false,
-			},
-		})
 
 		local src_cwd = repo_path .. "/src"
 		local info, err = git.create_worktree("scope-false-test", src_cwd)
@@ -222,5 +207,35 @@ describe("Worktree file copying", function()
 		is_true(vim.tbl_contains(files, "tracked.txt"), "tracked.txt should be in worktree")
 		is_true(vim.tbl_contains(files, "src/app.js"), "src/app.js should be in worktree")
 		is_true(vim.tbl_contains(files, "lib/util.js"), "lib/util.js should be in worktree")
+	end)
+
+	it("copies untracked files when .vibeinclude uses trailing slash pattern", function()
+		local repo_path = helpers.create_test_repo("scope-trailing-slash", {
+			["tracked.txt"] = "tracked content",
+		})
+
+		helpers.write_file(repo_path .. "/temp/main.py", "print('hello')")
+		helpers.write_file(repo_path .. "/temp/config.json", '{"key": "val"}')
+		helpers.write_file(repo_path .. "/other/skip.txt", "should not be copied")
+
+		-- trailing slash = directory pattern (git pathspec matches all files under dir)
+		helpers.write_file(repo_path .. "/.vibeinclude", "temp/")
+
+		local info, err = git.create_worktree("scope-trailing-test", repo_path)
+
+		assert.is_nil(err, "Error should be nil: " .. (err or "nil"))
+		assert.is_not_nil(info)
+
+		local files = list_files_in_dir(info.worktree_path)
+
+		-- Files under temp/ should be copied
+		is_true(vim.tbl_contains(files, "temp/main.py"), "temp/main.py should be in worktree")
+		is_true(vim.tbl_contains(files, "temp/config.json"), "temp/config.json should be in worktree")
+
+		-- Files NOT under temp/ should NOT be copied (untracked, not in .vibeinclude)
+		eq(false, vim.tbl_contains(files, "other/skip.txt"), "other/skip.txt should NOT be in worktree")
+
+		-- Tracked files should always be present
+		is_true(vim.tbl_contains(files, "tracked.txt"), "tracked.txt should be in worktree")
 	end)
 end)

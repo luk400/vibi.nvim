@@ -19,6 +19,7 @@ local function setup_test_buffer(auto_items, review_items)
 		review_items = review_items or {},
 		auto_items = auto_items or {},
 		item_contents = {},
+		auto_item_contents = {},
 		resolved_count = 0,
 		original_lines = { "line1", "line2", "line3", "line4", "line5" },
 		merged_lines = {},

@@ -109,11 +109,19 @@ end
 --- Set up keymaps on a preview popup buffer
 ---@param preview_bufnr integer Preview buffer number
 ---@param handlers table Handler functions
----@param classification string Classification of the item being previewed
+---@param classification string|nil Classification of the item being previewed (nil for auto items)
 function M.setup_preview(preview_bufnr, handlers, classification)
 	local opts = { buffer = preview_bufnr, silent = true, noremap = true }
 
-	if classification == types.CONFLICT then
+	if classification == nil then
+		-- Auto-item preview: accept/reject only
+		if handlers.accept then
+			vim.keymap.set("n", "<leader>a", handlers.accept, opts)
+		end
+		if handlers.reject then
+			vim.keymap.set("n", "<leader>r", handlers.reject, opts)
+		end
+	elseif classification == types.CONFLICT then
 		vim.keymap.set("n", "<leader>k", handlers.keep_user, opts)
 		vim.keymap.set("n", "<leader>a", handlers.keep_ai, opts)
 		vim.keymap.set("n", "<leader>e", handlers.edit_manually, opts)

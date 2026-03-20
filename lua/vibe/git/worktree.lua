@@ -98,26 +98,6 @@ local function files_differ(path_a, path_b)
 	return false
 end
 
-local function get_untracked_patterns(repo_root)
-	local opts = config.options or {}
-	local worktree_opts = opts.worktree or {}
-
-	if worktree_opts.use_vibeinclude ~= false then
-		local vibeinclude_patterns = get_vibeinclude_patterns(repo_root)
-		if vibeinclude_patterns then
-			return vibeinclude_patterns
-		end
-	end
-
-	local copy_untracked = worktree_opts.copy_untracked
-	if copy_untracked == true then
-		return {}
-	elseif type(copy_untracked) == "table" then
-		return copy_untracked
-	end
-
-	return {}
-end
 
 function M.is_git_repo(cwd)
 	local _, exit_code, _ = git_cmd({ "rev-parse", "--is-inside-work-tree" }, { cwd = cwd, ignore_error = true })
@@ -272,10 +252,8 @@ function M.create_worktree(session_name, repo_cwd)
 	end
 
 	local changed_output = git_cmd({ "diff", "--name-only", "HEAD" }, { cwd = repo_cwd, ignore_error = true })
-	local untracked_output = git_cmd(
-		{ "ls-files", "--others", "--exclude-standard" },
-		{ cwd = repo_cwd, ignore_error = true }
-	)
+	local vibeinclude_patterns = get_vibeinclude_patterns(repo_root)
+	local untracked_copied = 0
 
 	local files_to_copy = {}
 	for file in (changed_output or ""):gmatch("[^\r\n]+") do
@@ -284,38 +262,31 @@ function M.create_worktree(session_name, repo_cwd)
 		end
 	end
 
-	local untracked_patterns = get_untracked_patterns(repo_root)
-	local copy_all_untracked = config.options
-		and config.options.worktree
-		and config.options.worktree.copy_untracked == true
+	if vibeinclude_patterns then
+		-- Use git pathspec to filter: git ls-files --others -- pattern1 pattern2 ...
+		-- No --exclude-standard: .vibeinclude overrides .gitignore (inclusion is explicit)
+		local ls_args = { "ls-files", "--others", "--" }
+		for _, pat in ipairs(vibeinclude_patterns) do
+			table.insert(ls_args, pat)
+		end
+		local untracked_output = git_cmd(ls_args, { cwd = repo_root, ignore_error = true })
 
-	for file in (untracked_output or ""):gmatch("[^\r\n]+") do
-		if file ~= "" then
-			if copy_all_untracked or (#untracked_patterns > 0 and M.matches_patterns(file, untracked_patterns)) then
+		for file in (untracked_output or ""):gmatch("[^\r\n]+") do
+			if file ~= "" then
 				files_to_copy[file] = true
+				untracked_copied = untracked_copied + 1
 			end
 		end
 	end
 
-	if repo_cwd ~= repo_root then
-		local cwd_relative = repo_cwd
-		if vim.startswith(cwd_relative, repo_root .. "/") then
-			cwd_relative = cwd_relative:sub(#repo_root + 2)
-		elseif vim.startswith(cwd_relative, repo_root) then
-			cwd_relative = cwd_relative:sub(#repo_root + 1)
-			if cwd_relative:sub(1, 1) == "/" then
-				cwd_relative = cwd_relative:sub(2)
-			end
-		end
-
-		if cwd_relative ~= "" then
-			local filtered_files = {}
-			for file, _ in pairs(files_to_copy) do
-				if vim.startswith(file, cwd_relative .. "/") or file == cwd_relative then
-					filtered_files[file] = true
-				end
-			end
-			files_to_copy = filtered_files
+	if vibeinclude_patterns then
+		if untracked_copied > 0 then
+			vim.notify(
+				string.format("[Vibe] .vibeinclude: copied %d untracked file(s)", untracked_copied),
+				vim.log.levels.INFO
+			)
+		else
+			vim.notify("[Vibe] .vibeinclude found but no untracked files matched", vim.log.levels.WARN)
 		end
 	end
 
@@ -459,10 +430,8 @@ function M.create_worktree_async(session_name, repo_cwd, callback)
 
 				-- Phase 3 (sync in callback, fast): copy files, snapshot commit
 				local changed_output = git_cmd({ "diff", "--name-only", "HEAD" }, { cwd = repo_cwd, ignore_error = true })
-				local untracked_output = git_cmd(
-					{ "ls-files", "--others", "--exclude-standard" },
-					{ cwd = repo_cwd, ignore_error = true }
-				)
+				local vibeinclude_patterns = get_vibeinclude_patterns(repo_root)
+				local untracked_copied = 0
 
 				local files_to_copy = {}
 				for file in (changed_output or ""):gmatch("[^\r\n]+") do
@@ -471,38 +440,29 @@ function M.create_worktree_async(session_name, repo_cwd, callback)
 					end
 				end
 
-				local untracked_patterns = get_untracked_patterns(repo_root)
-				local copy_all_untracked = config.options
-					and config.options.worktree
-					and config.options.worktree.copy_untracked == true
+				if vibeinclude_patterns then
+					local ls_args = { "ls-files", "--others", "--" }
+					for _, pat in ipairs(vibeinclude_patterns) do
+						table.insert(ls_args, pat)
+					end
+					local untracked_output = git_cmd(ls_args, { cwd = repo_root, ignore_error = true })
 
-				for file in (untracked_output or ""):gmatch("[^\r\n]+") do
-					if file ~= "" then
-						if copy_all_untracked or (#untracked_patterns > 0 and M.matches_patterns(file, untracked_patterns)) then
+					for file in (untracked_output or ""):gmatch("[^\r\n]+") do
+						if file ~= "" then
 							files_to_copy[file] = true
+							untracked_copied = untracked_copied + 1
 						end
 					end
 				end
 
-				if repo_cwd ~= repo_root then
-					local cwd_relative = repo_cwd
-					if vim.startswith(cwd_relative, repo_root .. "/") then
-						cwd_relative = cwd_relative:sub(#repo_root + 2)
-					elseif vim.startswith(cwd_relative, repo_root) then
-						cwd_relative = cwd_relative:sub(#repo_root + 1)
-						if cwd_relative:sub(1, 1) == "/" then
-							cwd_relative = cwd_relative:sub(2)
-						end
-					end
-
-					if cwd_relative ~= "" then
-						local filtered_files = {}
-						for file, _ in pairs(files_to_copy) do
-							if vim.startswith(file, cwd_relative .. "/") or file == cwd_relative then
-								filtered_files[file] = true
-							end
-						end
-						files_to_copy = filtered_files
+				if vibeinclude_patterns then
+					if untracked_copied > 0 then
+						vim.notify(
+							string.format("[Vibe] .vibeinclude: copied %d untracked file(s)", untracked_copied),
+							vim.log.levels.INFO
+						)
+					else
+						vim.notify("[Vibe] .vibeinclude found but no untracked files matched", vim.log.levels.WARN)
 					end
 				end
 
@@ -968,6 +928,16 @@ function M.matches_gitignore(filepath, patterns)
 				or M.matches_patterns(filepath, { pat .. "/**" })
 			then
 				return true
+			end
+			-- **/ prefix means "at any depth, including root" — also try bare suffix
+			local bare = pat:match("^%*%*/(.*)")
+			if bare then
+				if
+					M.matches_patterns(filepath, { bare })
+					or M.matches_patterns(filepath, { bare .. "/**" })
+				then
+					return true
+				end
 			end
 		else
 			-- Unanchored: match if any path segment matches, or as prefix

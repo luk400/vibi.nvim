@@ -28,7 +28,6 @@ describe("Custom worktree directory", function()
 			quit_protection = false,
 			worktree = {
 				worktree_dir = custom_worktree_dir,
-				copy_untracked = true,
 			},
 		})
 	end)

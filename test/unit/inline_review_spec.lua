@@ -19,6 +19,7 @@ local function setup_test_buffer(review_items, buf_lines)
 		review_items = review_items or {},
 		auto_items = {},
 		item_contents = {},
+		auto_item_contents = {},
 		resolved_count = 0,
 		original_lines = vim.deepcopy(buf_lines or { "line1", "line2", "line3", "line4", "line5" }),
 		merged_lines = {},
@@ -139,7 +140,7 @@ describe("Inline review display", function()
 			eq(4, mark[4].end_row) -- end at row 4 (exclusive)
 		end)
 
-		it("inserts placeholder when AI deleted the section", function()
+		it("inserts sentinel line when AI deleted the section", function()
 			local review_items = {
 				{
 					classification = types.CONFLICT,
@@ -158,8 +159,11 @@ describe("Inline review display", function()
 
 			local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 			eq(3, #lines)
-			-- Should have placeholder
-			assert.is_truthy(lines[2]:find("deleted"))
+			-- Should have empty sentinel line as hover target
+			eq("", lines[2])
+			-- Should be marked as deletion sentinel
+			local ic = renderer.buffer_state[bufnr].item_contents[1]
+			assert.is_truthy(ic.is_deletion_sentinel)
 		end)
 	end)
 

@@ -43,6 +43,7 @@ function M.setup_highlights()
 	vim.api.nvim_set_hl(0, "VibeAutoMergedAdd", { bg = "#1a3a1a", default = true })
 	vim.api.nvim_set_hl(0, "VibeAutoMergedDelete", { bg = "#3a1a1a", fg = "#FF6B6B", default = true })
 	vim.api.nvim_set_hl(0, "VibeAutoMergedChange", { bg = "#3a3a1a", default = true })
+	vim.api.nvim_set_hl(0, "VibeDeleteSentinel", { bg = "#3a1a1a", fg = "#FF6B6B", default = true })
 
 	-- Preview sections
 	vim.api.nvim_set_hl(0, "VibePreviewUser", { fg = "#74C0FC", bold = true, default = true })
@@ -59,6 +60,21 @@ function M.setup_highlights()
 	vim.fn.sign_define("VibeReviewConflict", { text = "!", texthl = "ErrorMsg" })
 	vim.fn.sign_define("VibeReviewSuggestion", { text = "~", texthl = "WarningMsg" })
 	vim.fn.sign_define("VibeReviewConvergent", { text = "=", texthl = "String" })
+end
+
+--- Find the main (non-floating) window showing a buffer
+---@param bufnr integer
+---@return integer|nil winid
+local function find_buf_win(bufnr)
+	for _, winid in ipairs(vim.api.nvim_list_wins()) do
+		if vim.api.nvim_win_get_buf(winid) == bufnr then
+			local cfg = vim.api.nvim_win_get_config(winid)
+			if cfg.relative == "" then
+				return winid
+			end
+		end
+	end
+	return nil
 end
 
 --- Get the current extmark range for a review item
@@ -154,6 +170,7 @@ function M.show_file(worktree_path, filepath, hunks, merge_mode)
 		review_items = review_items,
 		auto_items = auto_items,
 		item_contents = {},
+		auto_item_contents = {},
 		resolved_count = 0,
 		original_lines = vim.deepcopy(user_lines),
 		merged_lines = merged_lines,
@@ -311,6 +328,11 @@ function M._build_resolved_content(state)
 			else
 				replacement = region.user_lines
 			end
+			-- For auto-resolved deletions, insert a sentinel line
+			if #(replacement or {}) == 0 and #(region.base_lines or {}) > 0 then
+				replacement = { "" }
+				region._has_sentinel = true
+			end
 		else
 			-- Not auto-resolved: keep user's version for now (will be handled interactively)
 			replacement = region.user_lines
@@ -374,9 +396,10 @@ function M.setup_inline_review_items(bufnr)
 			stored_lines = vim.deepcopy(region.base_lines or {})
 		end
 
-		-- Handle empty display_lines (e.g., AI deleted something in a conflict)
-		if #display_lines == 0 then
-			display_lines = { "  (deleted this section)" }
+		-- Handle empty display_lines (deletion): use sentinel line as hover target
+		local is_deletion = #display_lines == 0
+		if is_deletion then
+			display_lines = { "" } -- sentinel: empty real line
 		end
 
 		-- Replace buffer lines at the mapped position
@@ -405,7 +428,7 @@ function M.setup_inline_review_items(bufnr)
 
 		-- Place ranged extmark spanning all display lines
 		local sign_id = i * 1000
-		local hl_group = get_inline_hl(region.classification)
+		local hl_group = is_deletion and "VibeDeleteSentinel" or get_inline_hl(region.classification)
 		local sign_name = get_sign_name(region.classification)
 		pcall(vim.fn.sign_place, sign_id, "vibe_review", sign_name, bufnr, { lnum = api_start + 1 })
 
@@ -420,6 +443,22 @@ function M.setup_inline_review_items(bufnr)
 			hl_eol = true,
 			priority = 200,
 		})
+
+		-- For non-CONFLICT deletion sentinels, add virtual lines showing deleted content
+		if is_deletion and cls ~= types.CONFLICT then
+			local virt_lines = {}
+			for _, line in ipairs(stored_lines) do
+				table.insert(virt_lines, { { line, "VibeAutoMergedDelete" } })
+			end
+			if #virt_lines > 0 then
+				pcall(vim.api.nvim_buf_set_extmark, bufnr, M.ns, extmark_start, 0, {
+					id = sign_id + 1,
+					virt_lines = virt_lines,
+					virt_lines_above = true,
+				})
+			end
+		end
+
 		-- Store item contents
 		state.item_contents[i] = {
 			display_lines = display_lines,
@@ -427,6 +466,7 @@ function M.setup_inline_review_items(bufnr)
 			region = region,
 			buffer_start = user_start, -- 1-indexed
 			buffer_line_count = #display_lines,
+			is_deletion_sentinel = is_deletion,
 		}
 
 		region._extmark_idx = i
@@ -492,7 +532,7 @@ function M.highlight_auto_merged(bufnr)
 	local current_lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 	local base_to_buf = M._build_line_map(snapshot_lines, current_lines)
 
-	for _, region in ipairs(state.auto_items) do
+	for auto_idx, region in ipairs(state.auto_items) do
 		local base_lines = region.base_lines or {}
 		local resolved_lines
 		if region.classification == types.AI_ONLY then
@@ -504,19 +544,34 @@ function M.highlight_auto_merged(bufnr)
 		local rstart = region.base_range[1]
 		local buf_start = base_to_buf[rstart] or rstart
 
-		if #base_lines > 0 and #resolved_lines == 0 then
-			-- Pure deletion: show deleted text as virtual lines
+		if #base_lines > 0 and #(resolved_lines or {}) == 0 then
+			-- Deletion with sentinel (sentinel line was inserted by _build_resolved_content)
+			local sentinel_row = buf_start - 1 -- 0-indexed
+			sentinel_row = math.max(0, math.min(sentinel_row, #current_lines - 1))
+			-- Highlight sentinel line
+			pcall(vim.api.nvim_buf_set_extmark, bufnr, M.ns_auto, sentinel_row, 0, {
+				id = auto_idx * 1000 + 500,
+				end_row = sentinel_row + 1,
+				hl_group = "VibeDeleteSentinel",
+				hl_eol = true,
+			})
+			-- Virtual lines above sentinel showing deleted content
 			local virt_lines = {}
 			for _, line in ipairs(base_lines) do
 				table.insert(virt_lines, { { line, "VibeAutoMergedDelete" } })
 			end
-			-- Anchor at the line after the deletion point
-			local anchor = math.min(buf_start - 1, #current_lines - 1)
-			anchor = math.max(0, anchor)
-			pcall(vim.api.nvim_buf_set_extmark, bufnr, M.ns_auto, anchor, 0, {
+			pcall(vim.api.nvim_buf_set_extmark, bufnr, M.ns_auto, sentinel_row, 0, {
 				virt_lines = virt_lines,
 				virt_lines_above = true,
 			})
+			state.auto_item_contents[auto_idx] = {
+				region = region,
+				buf_start_0 = sentinel_row,
+				line_count = 1,
+				is_deletion = true,
+				is_sentinel = true,
+				extmark_id = auto_idx * 1000 + 500,
+			}
 		elseif #base_lines == 0 and #resolved_lines > 0 then
 			-- Pure addition: highlight each added line
 			for j = 0, #resolved_lines - 1 do
@@ -529,6 +584,20 @@ function M.highlight_auto_merged(bufnr)
 					})
 				end
 			end
+			-- Track for hover
+			local start_0 = buf_start - 1
+			pcall(vim.api.nvim_buf_set_extmark, bufnr, M.ns_auto, start_0, 0, {
+				id = auto_idx * 1000 + 500,
+				end_row = start_0 + #resolved_lines,
+			})
+			state.auto_item_contents[auto_idx] = {
+				region = region,
+				buf_start_0 = start_0,
+				line_count = #resolved_lines,
+				is_deletion = false,
+				is_sentinel = false,
+				extmark_id = auto_idx * 1000 + 500,
+			}
 		else
 			-- Modification: check if content actually differs
 			local differs = #base_lines ~= #resolved_lines
@@ -551,6 +620,20 @@ function M.highlight_auto_merged(bufnr)
 						})
 					end
 				end
+				-- Track for hover
+				local start_0 = buf_start - 1
+				pcall(vim.api.nvim_buf_set_extmark, bufnr, M.ns_auto, start_0, 0, {
+					id = auto_idx * 1000 + 500,
+					end_row = start_0 + #resolved_lines,
+				})
+				state.auto_item_contents[auto_idx] = {
+					region = region,
+					buf_start_0 = start_0,
+					line_count = #resolved_lines,
+					is_deletion = false,
+					is_sentinel = false,
+					extmark_id = auto_idx * 1000 + 500,
+				}
 			end
 		end
 	end
@@ -564,12 +647,42 @@ function M.get_item_at_cursor(bufnr)
 		return nil, nil
 	end
 
-	local cursor_line = vim.api.nvim_win_get_cursor(0)[1] - 1 -- 0-indexed
+	-- Use the window showing the review buffer, not necessarily window 0
+	local win = find_buf_win(bufnr) or 0
+	local cursor_line = vim.api.nvim_win_get_cursor(win)[1] - 1 -- 0-indexed
 	for i, region in ipairs(state.review_items) do
 		if not region._resolved then
 			local start_row, end_row = get_current_range(bufnr, i)
 			if start_row and cursor_line >= start_row and cursor_line < end_row then
 				return region, i
+			end
+		end
+	end
+	return nil, nil
+end
+
+--- Get the auto-merged item at cursor position
+function M.get_auto_item_at_cursor(bufnr)
+	bufnr = bufnr or vim.api.nvim_get_current_buf()
+	local state = M.buffer_state[bufnr]
+	if not state then
+		return nil, nil
+	end
+
+	local win = find_buf_win(bufnr) or 0
+	local cursor_line = vim.api.nvim_win_get_cursor(win)[1] - 1 -- 0-indexed
+	for i, region in ipairs(state.auto_items) do
+		if not region._rejected and not region._dismissed then
+			local aic = state.auto_item_contents[i]
+			if aic then
+				local mark = vim.api.nvim_buf_get_extmark_by_id(bufnr, M.ns_auto, aic.extmark_id, { details = true })
+				if mark and #mark > 0 then
+					local s = mark[1]
+					local e = (mark[3] and mark[3].end_row) or (s + 1)
+					if cursor_line >= s and cursor_line < e then
+						return region, i
+					end
+				end
 			end
 		end
 	end
@@ -595,16 +708,28 @@ function M.show_preview()
 		return
 	end
 
+	-- Check review items first, then auto items
 	local region, idx = M.get_item_at_cursor(bufnr)
+	local is_auto = false
+	local auto_aic = nil
 	if not region or region._resolved then
+		region, idx = M.get_auto_item_at_cursor(bufnr)
+		if region then
+			is_auto = true
+			auto_aic = state.auto_item_contents[idx]
+		end
+	end
+	if not region then
 		M.close_preview()
 		return
 	end
+
 	-- Avoid re-opening preview when cursor moves within the same region
-	if state._last_preview_idx == idx and M.is_preview_visible() then
+	local preview_key = is_auto and ("auto_" .. idx) or idx
+	if state._last_preview_idx == preview_key and M.is_preview_visible() then
 		return
 	end
-	state._last_preview_idx = idx
+	state._last_preview_idx = preview_key
 
 	M.close_preview()
 
@@ -614,6 +739,7 @@ function M.show_preview()
 	-- Build preview content
 	local preview_lines = {}
 	local hl_ranges = {} -- {line_idx, hl_group}
+	local has_old_content = false
 
 	local k_keep = kd.get_key_or_fallback(bufnr, kd.DESC_KEEP_YOURS, "<leader>k")
 	local k_accept = kd.get_key_or_fallback(bufnr, kd.DESC_ACCEPT, "<leader>a")
@@ -621,9 +747,45 @@ function M.show_preview()
 	local k_edit = kd.get_key_or_fallback(bufnr, kd.DESC_EDIT, "<leader>e")
 	local k_quit = kd.get_key_or_fallback(bufnr, kd.DESC_QUIT, "q")
 
-	if cls == types.CONFLICT then
+	if is_auto then
+		-- Auto-merged item preview
+		local is_sentinel = auto_aic and auto_aic.is_sentinel
+		if is_sentinel then
+			-- Deletion sentinel: show deleted lines + recover/dismiss
+			local header =
+				string.format("── [%s] recover  [%s] dismiss  [%s] close ──", k_accept, k_reject, k_quit)
+			table.insert(preview_lines, header)
+			table.insert(hl_ranges, { #preview_lines, "VibePreviewKeymap" })
+			table.insert(preview_lines, "")
+			table.insert(preview_lines, "━━━━━━━━━ Deleted lines ━━━━━━━━━")
+			table.insert(hl_ranges, { #preview_lines, "VibeAutoMergedDelete" })
+			for _, line in ipairs(region.base_lines or {}) do
+				table.insert(preview_lines, line)
+				table.insert(hl_ranges, { #preview_lines, "VibeAutoMergedDelete" })
+			end
+			has_old_content = true
+		else
+			-- Auto-merged modification/addition: show old version + keep/revert
+			local header = string.format("── [%s] keep  [%s] revert  [%s] close ──", k_accept, k_reject, k_quit)
+			table.insert(preview_lines, header)
+			table.insert(hl_ranges, { #preview_lines, "VibePreviewKeymap" })
+			if #(region.base_lines or {}) > 0 then
+				has_old_content = true
+				table.insert(preview_lines, "")
+				table.insert(preview_lines, "━━━━━━━━━ Previous version ━━━━━━━━━")
+				table.insert(hl_ranges, { #preview_lines, "VibePreviewBase" })
+				for _, line in ipairs(region.base_lines) do
+					table.insert(preview_lines, line)
+					table.insert(hl_ranges, { #preview_lines, "VibePreviewBase" })
+				end
+			end
+		end
+		info = { label = is_sentinel and "Auto-merged deletion" or "Auto-merged" }
+	elseif cls == types.CONFLICT then
 		-- Conflict: show keybinds + user's version (AI content is already in buffer)
-		local header = string.format("── [%s] yours  [%s] AI  [%s] edit  [%s] close ──", k_keep, k_accept, k_edit, k_quit)
+		has_old_content = true
+		local header =
+			string.format("── [%s] yours  [%s] AI  [%s] edit  [%s] close ──", k_keep, k_accept, k_edit, k_quit)
 		table.insert(preview_lines, header)
 		table.insert(hl_ranges, { #preview_lines, "VibePreviewKeymap" })
 		table.insert(preview_lines, "")
@@ -641,10 +803,36 @@ function M.show_preview()
 			table.insert(hl_ranges, { #preview_lines, "VibePreviewBase" })
 		end
 	else
-		-- Suggestions: keybinds only (content already visible inline)
+		-- Suggestions: keybinds + optional old version
 		local header = string.format("── [%s] accept  [%s] reject  [%s] close ──", k_accept, k_reject, k_quit)
 		table.insert(preview_lines, header)
 		table.insert(hl_ranges, { #preview_lines, "VibePreviewKeymap" })
+
+		-- Check for deletion sentinel
+		local ic = state.item_contents[idx]
+		if ic and ic.is_deletion_sentinel then
+			has_old_content = true
+			table.insert(preview_lines, "")
+			table.insert(preview_lines, "━━━━━━━━━ Deleted lines ━━━━━━━━━")
+			table.insert(hl_ranges, { #preview_lines, "VibeAutoMergedDelete" })
+			for _, line in ipairs(ic.stored_lines or {}) do
+				table.insert(preview_lines, line)
+				table.insert(hl_ranges, { #preview_lines, "VibeAutoMergedDelete" })
+			end
+		else
+			-- Show previous version for modifications (not pure additions)
+			local old_lines = ic and ic.stored_lines or {}
+			if #old_lines > 0 then
+				has_old_content = true
+				table.insert(preview_lines, "")
+				table.insert(preview_lines, "━━━━━━━━━ Previous version ━━━━━━━━━")
+				table.insert(hl_ranges, { #preview_lines, "VibePreviewBase" })
+				for _, line in ipairs(old_lines) do
+					table.insert(preview_lines, line)
+					table.insert(hl_ranges, { #preview_lines, "VibePreviewBase" })
+				end
+			end
+		end
 	end
 
 	-- Create preview buffer
@@ -657,9 +845,10 @@ function M.show_preview()
 	local win_height = vim.api.nvim_win_get_height(0)
 	local width = math.max(60, math.floor(win_width * 0.8))
 	local height = math.min(#preview_lines + 2, math.max(20, math.floor(win_height * 0.7)))
+	local needs_scroll = height < #preview_lines + 2
 
-	-- For suggestions (keybinds only), use a smaller window
-	if cls ~= types.CONFLICT then
+	-- For keybinds-only previews (no old content), use a smaller window
+	if not has_old_content then
 		width = math.min(width, math.max(60, #preview_lines[1] + 4))
 		height = math.min(#preview_lines + 2, 5)
 		needs_scroll = false
@@ -703,7 +892,27 @@ function M.show_preview()
 	end
 
 	-- Preview keymaps
-	if cls == types.CONFLICT then
+	if is_auto then
+		local is_sentinel = auto_aic and auto_aic.is_sentinel
+		review_keymaps.setup_preview(M.preview_bufnr, {
+			accept = function()
+				M.close_preview()
+				if is_sentinel then
+					M.recover_auto_deletion(bufnr, idx)
+				end
+				-- For non-sentinel: "keep" = do nothing (already auto-merged)
+			end,
+			reject = function()
+				M.close_preview()
+				if is_sentinel then
+					M.dismiss_auto_deletion(bufnr, idx)
+				else
+					M.reject_auto_item(bufnr, idx)
+				end
+			end,
+			close = M.close_preview,
+		}, nil)
+	elseif cls == types.CONFLICT then
 		review_keymaps.setup_preview(M.preview_bufnr, {
 			keep_user = function()
 				M.close_preview()
@@ -735,8 +944,8 @@ function M.show_preview()
 end
 
 --- Resolve the review item at cursor
-function M.resolve_item(resolution)
-	local bufnr = vim.api.nvim_get_current_buf()
+function M.resolve_item(resolution, bufnr)
+	bufnr = bufnr or vim.api.nvim_get_current_buf()
 	local state = M.buffer_state[bufnr]
 	if not state then
 		return false
@@ -767,11 +976,19 @@ function M.resolve_item(resolution)
 	local is_accept = (resolution == "keep_ai" or resolution == "accept")
 
 	if is_accept then
-		-- Content is already in buffer, just remove highlights (extmark already deleted above)
+		-- For deletion sentinels, remove the sentinel line from the buffer
+		local ic = state.item_contents[idx]
+		if ic and ic.is_deletion_sentinel then
+			vim.api.nvim_buf_set_lines(bufnr, start_row, end_row, false, {})
+		end
+		-- Clean up virtual line extmark if present
+		pcall(vim.api.nvim_buf_del_extmark, bufnr, M.ns, idx * 1000 + 1)
 	else
 		-- Replace displayed range with stored_lines (keep_user / reject)
 		local stored_lines = state.item_contents[idx] and state.item_contents[idx].stored_lines or {}
 		vim.api.nvim_buf_set_lines(bufnr, start_row, end_row, false, stored_lines)
+		-- Clean up virtual line extmark if present
+		pcall(vim.api.nvim_buf_del_extmark, bufnr, M.ns, idx * 1000 + 1)
 	end
 
 	region._resolved = true
@@ -862,6 +1079,103 @@ function M._mark_region_addressed(state, region, action)
 	pcall(git.mark_hunk_addressed, state.worktree_path, state.filepath, dummy_hunk, action)
 end
 
+--- Reject an auto-merged modification/addition (revert to base)
+function M.reject_auto_item(bufnr, auto_idx)
+	local state = M.buffer_state[bufnr]
+	if not state then
+		return
+	end
+	local region = state.auto_items[auto_idx]
+	local aic = state.auto_item_contents[auto_idx]
+	if not region or not aic then
+		return
+	end
+
+	local mark = vim.api.nvim_buf_get_extmark_by_id(bufnr, M.ns_auto, aic.extmark_id, { details = true })
+	if not mark or #mark == 0 then
+		return
+	end
+	local start_row = mark[1]
+	local end_row = (mark[3] and mark[3].end_row) or (start_row + 1)
+
+	pcall(vim.cmd, "undojoin")
+	vim.api.nvim_buf_set_lines(bufnr, start_row, end_row, false, region.base_lines or {})
+
+	-- Clean up extmarks in affected range
+	pcall(vim.api.nvim_buf_del_extmark, bufnr, M.ns_auto, aic.extmark_id)
+	local new_end = start_row + #(region.base_lines or {})
+	local marks = vim.api.nvim_buf_get_extmarks(bufnr, M.ns_auto, { start_row, 0 }, { new_end, 0 }, {})
+	for _, m in ipairs(marks) do
+		pcall(vim.api.nvim_buf_del_extmark, bufnr, M.ns_auto, m[1])
+	end
+
+	region._rejected = true
+	state._last_preview_idx = nil
+	M._mark_region_addressed(state, region, "rejected")
+end
+
+--- Recover auto-merged deleted lines (replace sentinel with original content)
+function M.recover_auto_deletion(bufnr, auto_idx)
+	local state = M.buffer_state[bufnr]
+	if not state then
+		return
+	end
+	local region = state.auto_items[auto_idx]
+	local aic = state.auto_item_contents[auto_idx]
+	if not region or not aic or not aic.is_sentinel then
+		return
+	end
+
+	local mark = vim.api.nvim_buf_get_extmark_by_id(bufnr, M.ns_auto, aic.extmark_id, { details = true })
+	if not mark or #mark == 0 then
+		return
+	end
+	local sentinel_row = mark[1]
+
+	pcall(vim.cmd, "undojoin")
+	-- Replace sentinel with recovered lines
+	vim.api.nvim_buf_set_lines(bufnr, sentinel_row, sentinel_row + 1, false, region.base_lines or {})
+
+	-- Clean up extmarks
+	pcall(vim.api.nvim_buf_del_extmark, bufnr, M.ns_auto, aic.extmark_id)
+	local new_end = sentinel_row + #(region.base_lines or {})
+	local marks = vim.api.nvim_buf_get_extmarks(bufnr, M.ns_auto, { sentinel_row, 0 }, { new_end, 0 }, {})
+	for _, m in ipairs(marks) do
+		pcall(vim.api.nvim_buf_del_extmark, bufnr, M.ns_auto, m[1])
+	end
+
+	region._rejected = true -- "rejected" the deletion = recovered original
+	state._last_preview_idx = nil
+	M._mark_region_addressed(state, region, "rejected")
+end
+
+--- Dismiss auto-merged deletion (confirm deletion, remove sentinel)
+function M.dismiss_auto_deletion(bufnr, auto_idx)
+	local state = M.buffer_state[bufnr]
+	if not state then
+		return
+	end
+	local region = state.auto_items[auto_idx]
+	local aic = state.auto_item_contents[auto_idx]
+	if not region or not aic or not aic.is_sentinel then
+		return
+	end
+
+	local mark = vim.api.nvim_buf_get_extmark_by_id(bufnr, M.ns_auto, aic.extmark_id, { details = true })
+	if not mark or #mark == 0 then
+		return
+	end
+
+	pcall(vim.cmd, "undojoin")
+	-- Remove sentinel entirely
+	vim.api.nvim_buf_set_lines(bufnr, mark[1], mark[1] + 1, false, {})
+	pcall(vim.api.nvim_buf_del_extmark, bufnr, M.ns_auto, aic.extmark_id)
+
+	region._dismissed = true
+	state._last_preview_idx = nil
+	M._mark_region_addressed(state, region, "accepted")
+end
+
 function M.count_remaining(bufnr)
 	bufnr = bufnr or vim.api.nvim_get_current_buf()
 	local state = M.buffer_state[bufnr]
@@ -876,31 +1190,51 @@ function M.count_remaining(bufnr)
 	return count
 end
 
+--- Collect all navigable target positions (review items + auto items)
+local function collect_nav_targets(bufnr, state)
+	local targets = {}
+	for i, region in ipairs(state.review_items) do
+		if not region._resolved then
+			local start_row = get_current_range(bufnr, i)
+			if start_row then
+				table.insert(targets, start_row)
+			end
+		end
+	end
+	for i, region in ipairs(state.auto_items) do
+		if not region._rejected and not region._dismissed then
+			local aic = state.auto_item_contents[i]
+			if aic then
+				local mark = vim.api.nvim_buf_get_extmark_by_id(bufnr, M.ns_auto, aic.extmark_id, { details = true })
+				if mark and #mark > 0 then
+					table.insert(targets, mark[1])
+				end
+			end
+		end
+	end
+	table.sort(targets)
+	return targets
+end
+
 function M.next_item(bufnr)
 	bufnr = bufnr or vim.api.nvim_get_current_buf()
 	local state = M.buffer_state[bufnr]
 	if not state then
 		return
 	end
-	local cursor_line = vim.api.nvim_win_get_cursor(0)[1] - 1
-	for i, region in ipairs(state.review_items) do
-		if not region._resolved then
-			local start_row = get_current_range(bufnr, i)
-			if start_row and start_row > cursor_line then
-				vim.api.nvim_win_set_cursor(0, { start_row + 1, 0 })
-				return
-			end
+	local win = find_buf_win(bufnr) or 0
+	local cursor_line = vim.api.nvim_win_get_cursor(win)[1] - 1
+	local targets = collect_nav_targets(bufnr, state)
+
+	for _, pos in ipairs(targets) do
+		if pos > cursor_line then
+			vim.api.nvim_win_set_cursor(win, { pos + 1, 0 })
+			return
 		end
 	end
 	-- Wrap around
-	for i, region in ipairs(state.review_items) do
-		if not region._resolved then
-			local start_row = get_current_range(bufnr, i)
-			if start_row then
-				vim.api.nvim_win_set_cursor(0, { start_row + 1, 0 })
-				return
-			end
-		end
+	if #targets > 0 then
+		vim.api.nvim_win_set_cursor(win, { targets[1] + 1, 0 })
 	end
 end
 
@@ -910,27 +1244,19 @@ function M.prev_item(bufnr)
 	if not state then
 		return
 	end
-	local cursor_line = vim.api.nvim_win_get_cursor(0)[1] - 1
-	for i = #state.review_items, 1, -1 do
-		local region = state.review_items[i]
-		if not region._resolved then
-			local start_row = get_current_range(bufnr, i)
-			if start_row and start_row < cursor_line then
-				vim.api.nvim_win_set_cursor(0, { start_row + 1, 0 })
-				return
-			end
+	local win = find_buf_win(bufnr) or 0
+	local cursor_line = vim.api.nvim_win_get_cursor(win)[1] - 1
+	local targets = collect_nav_targets(bufnr, state)
+
+	for i = #targets, 1, -1 do
+		if targets[i] < cursor_line then
+			vim.api.nvim_win_set_cursor(win, { targets[i] + 1, 0 })
+			return
 		end
 	end
 	-- Wrap around
-	for i = #state.review_items, 1, -1 do
-		local region = state.review_items[i]
-		if not region._resolved then
-			local start_row = get_current_range(bufnr, i)
-			if start_row then
-				vim.api.nvim_win_set_cursor(0, { start_row + 1, 0 })
-				return
-			end
-		end
+	if #targets > 0 then
+		vim.api.nvim_win_set_cursor(win, { targets[#targets] + 1, 0 })
 	end
 end
 
@@ -948,11 +1274,20 @@ function M.accept_all(bufnr)
 	end
 
 	-- Accept all = keep what's in the buffer. Just remove extmarks/signs.
+	-- Process in reverse to maintain stable positions for sentinel removal.
 	for i = #state.review_items, 1, -1 do
 		local region = state.review_items[i]
 		if not region._resolved then
+			local start_row, end_row = get_current_range(bufnr, i)
 			pcall(vim.api.nvim_buf_del_extmark, bufnr, M.ns, i * 1000)
+			pcall(vim.api.nvim_buf_del_extmark, bufnr, M.ns, i * 1000 + 1)
 			pcall(vim.fn.sign_unplace, "vibe_review", { buffer = bufnr, id = i * 1000 })
+
+			-- Remove sentinel lines for deletions
+			local ic = state.item_contents[i]
+			if ic and ic.is_deletion_sentinel and start_row then
+				vim.api.nvim_buf_set_lines(bufnr, start_row, end_row, false, {})
+			end
 
 			region._resolved = true
 			state.resolved_count = state.resolved_count + 1
@@ -999,15 +1334,34 @@ function M.finalize_file(bufnr)
 		return
 	end
 
-	-- Mark auto-merged items as addressed
+	-- Mark auto-merged items as addressed (skip already rejected/dismissed)
 	for _, region in ipairs(state.auto_items) do
-		local action = resolve.resolution_to_action_v2(region.classification, "accept")
-		M._mark_region_addressed(state, region, action)
+		if not region._rejected and not region._dismissed then
+			local action = resolve.resolution_to_action_v2(region.classification, "accept")
+			M._mark_region_addressed(state, region, action)
+		end
+	end
+
+	-- Remove remaining sentinel lines (user didn't interact with them)
+	-- Process in reverse to maintain stable positions
+	for i = #state.auto_items, 1, -1 do
+		local aic = state.auto_item_contents[i]
+		local region = state.auto_items[i]
+		if aic and aic.is_sentinel and not region._rejected and not region._dismissed then
+			local mark =
+				vim.api.nvim_buf_get_extmark_by_id(bufnr, M.ns_auto, aic.extmark_id, { details = true })
+			if mark and #mark > 0 then
+				pcall(vim.api.nvim_buf_set_lines, bufnr, mark[1], mark[1] + 1, false, {})
+			end
+		end
 	end
 
 	local user_file_path = vim.api.nvim_buf_get_name(bufnr)
 	vim.fn.mkdir(vim.fn.fnamemodify(user_file_path, ":h"), "p")
-	vim.cmd("write")
+	-- Ensure we write the review buffer, not whatever floating window might be current
+	vim.api.nvim_buf_call(bufnr, function()
+		vim.cmd("write")
+	end)
 	git.sync_resolved_file(state.worktree_path, state.filepath, user_file_path)
 
 	M.buffer_state[bufnr] = nil
@@ -1029,9 +1383,16 @@ function M.setup_tracking(bufnr)
 			if not state then
 				return
 			end
+			-- Check review items first, then auto items
 			local region, idx = M.get_item_at_cursor(bufnr)
-			if region and not region._resolved then
-				if state._last_preview_idx == idx and M.is_preview_visible() then
+			local is_auto = false
+			if not region or region._resolved then
+				region, idx = M.get_auto_item_at_cursor(bufnr)
+				is_auto = true
+			end
+			if region and (is_auto or not region._resolved) then
+				local preview_key = is_auto and ("auto_" .. idx) or idx
+				if state._last_preview_idx == preview_key and M.is_preview_visible() then
 					-- Same region, preview already open: do nothing
 				else
 					M.show_preview()
@@ -1061,7 +1422,7 @@ function M.setup_keymaps(bufnr)
 		end,
 		resolve = function(resolution)
 			M.close_preview()
-			M.resolve_item(resolution)
+			M.resolve_item(resolution, bufnr)
 		end,
 		next_item = function()
 			M.next_item(bufnr)
