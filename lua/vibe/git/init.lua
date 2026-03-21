@@ -132,6 +132,31 @@ function M.get_worktree_changed_files(worktree_path)
 	return files, ignored_count
 end
 
+function M.get_worktree_commit_messages(worktree_path)
+	local info = M.worktrees[worktree_path]
+	if not info or not info.snapshot_commit then
+		return {}
+	end
+
+	local output = git_cmd_mod.git_cmd(
+		{ "log", info.snapshot_commit .. "..HEAD", "--format=%s" },
+		{ cwd = worktree_path, ignore_error = true }
+	)
+
+	local messages = {}
+	for msg in (output or ""):gmatch("[^\r\n]+") do
+		if
+			msg ~= ""
+			and msg ~= "Vibe snapshot"
+			and msg ~= "Vibe snapshot (accepted)"
+			and msg ~= "Vibe snapshot (file sync)"
+		then
+			table.insert(messages, msg)
+		end
+	end
+	return messages
+end
+
 function M.get_unresolved_files(worktree_path)
 	local info = M.worktrees[worktree_path]
 	if not info then

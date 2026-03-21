@@ -331,7 +331,7 @@ function M.render()
 	table.insert(hl_data, { #lines - 1, "VibePickerFooter" })
 	table.insert(
 		lines,
-		string.format("%d file(s) selected  |  <Tab> toggle  |  <C-y> confirm  |  q cancel", count_selected())
+		string.format("%d file(s) selected  |  <Space> toggle  |  <C-y> confirm  |  q cancel", count_selected())
 	)
 	table.insert(hl_data, { #lines - 1, "VibePickerFooter" })
 
@@ -430,8 +430,8 @@ function M.setup_keymaps()
 	vim.keymap.set("n", "<Left>", M.go_up, opts)
 	vim.keymap.set("n", "<BS>", M.go_up, opts)
 
-	-- Tab: toggle selection and advance cursor
-	vim.keymap.set("n", "<Tab>", function()
+	-- Space: toggle selection and advance cursor
+	vim.keymap.set("n", "<Space>", function()
 		local entry, is_parent = M.get_current_entry()
 		if is_parent or not entry then
 			return

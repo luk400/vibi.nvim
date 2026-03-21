@@ -120,17 +120,13 @@ function M.show_list()
 	vim.keymap.set("n", "n", function()
 		close()
 		M.pick_directory(function(cwd)
-			local name = vim.fn.fnamemodify(cwd, ":t")
-			if name == "" then
-				name = "root"
+			local default_name = vim.fn.fnamemodify(cwd, ":t")
+			if default_name == "" then
+				default_name = "root"
 			end
-			local base_name = name
-			local counter = 1
-			while terminal.sessions[name] do
-				name = base_name .. "_" .. counter
-				counter = counter + 1
-			end
-			terminal.toggle(name, cwd)
+			M.prompt_session_name(default_name, function(name)
+				terminal.toggle(name, cwd)
+			end)
 		end)
 	end, { buffer = bufnr, silent = true })
 
@@ -495,6 +491,26 @@ function M.pick_directory(callback)
 	vim.keymap.set("n", "<Up>", move_prev, { buffer = bufnr, silent = true })
 end
 
+function M.prompt_session_name(default, callback)
+	vim.ui.input({ prompt = "Session name: ", default = default }, function(input)
+		if not input or input == "" then
+			return
+		end
+		local name = input:gsub("^%s+", ""):gsub("%s+$", "")
+		if name == "" then
+			return
+		end
+		if terminal.sessions[name] then
+			vim.notify("[Vibe] Session '" .. name .. "' already exists. Choose another name.", vim.log.levels.WARN)
+			vim.schedule(function()
+				M.prompt_session_name(name, callback)
+			end)
+			return
+		end
+		callback(name)
+	end)
+end
+
 function M.browse_directory(callback, start_path)
 	local current_path = start_path or vim.fn.getcwd()
 
@@ -715,17 +731,13 @@ function M.show_resume_list()
 	vim.keymap.set("n", "n", function()
 		close()
 		M.pick_directory(function(cwd)
-			local name = vim.fn.fnamemodify(cwd, ":t")
-			if name == "" then
-				name = "root"
+			local default_name = vim.fn.fnamemodify(cwd, ":t")
+			if default_name == "" then
+				default_name = "root"
 			end
-			local base_name = name
-			local counter = 1
-			while terminal.sessions[name] do
-				name = base_name .. "_" .. counter
-				counter = counter + 1
-			end
-			terminal.toggle(name, cwd)
+			M.prompt_session_name(default_name, function(name)
+				terminal.toggle(name, cwd)
+			end)
 		end)
 	end, { buffer = bufnr, silent = true })
 

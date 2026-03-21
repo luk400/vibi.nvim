@@ -21,17 +21,13 @@ local function smart_vibe(session_name_arg)
 	if session_count == 0 then
 		-- No sessions: show directory picker
 		session.pick_directory(function(cwd)
-			local name = vim.fn.fnamemodify(cwd, ":t")
-			if name == "" then
-				name = "root"
+			local default_name = vim.fn.fnamemodify(cwd, ":t")
+			if default_name == "" then
+				default_name = "root"
 			end
-			local base_name = name
-			local counter = 1
-			while terminal.sessions[name] do
-				name = base_name .. "_" .. counter
-				counter = counter + 1
-			end
-			terminal.toggle(name, cwd)
+			session.prompt_session_name(default_name, function(name)
+				terminal.toggle(name, cwd)
+			end)
 		end)
 	else
 		-- One or more sessions: show list
@@ -76,27 +72,20 @@ function M.setup(opts)
 	vim.api.nvim_create_user_command("VibeNew", function(args)
 		local explicit_name = args.args ~= "" and args.args or nil
 		if explicit_name then
-			local name = explicit_name
-			local base_name = name
-			local counter = 1
-			while terminal.sessions[name] do
-				name = base_name .. "_" .. counter
-				counter = counter + 1
+			if terminal.sessions[explicit_name] then
+				vim.notify("[Vibe] Session '" .. explicit_name .. "' already exists.", vim.log.levels.WARN)
+				return
 			end
-			terminal.toggle(name)
+			terminal.toggle(explicit_name)
 		else
 			session.pick_directory(function(cwd)
-				local name = vim.fn.fnamemodify(cwd, ":t")
-				if name == "" then
-					name = "root"
+				local default_name = vim.fn.fnamemodify(cwd, ":t")
+				if default_name == "" then
+					default_name = "root"
 				end
-				local base_name = name
-				local counter = 1
-				while terminal.sessions[name] do
-					name = base_name .. "_" .. counter
-					counter = counter + 1
-				end
-				terminal.toggle(name, cwd)
+				session.prompt_session_name(default_name, function(name)
+					terminal.toggle(name, cwd)
+				end)
 			end)
 		end
 	end, {
@@ -325,6 +314,13 @@ function M.setup(opts)
 		require("vibe.help").show()
 	end, {
 		desc = "Show context-sensitive Vibe help",
+	})
+
+	-- Create :VibeConflictResolution command
+	vim.api.nvim_create_user_command("VibeConflictResolution", function()
+		require("vibe.conflict_resolution").show()
+	end, {
+		desc = "Merge changes from multiple Vibe worktrees using an AI agent",
 	})
 
 	-- Set up keybinding
