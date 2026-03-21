@@ -306,13 +306,13 @@ function M._build_resolved_content(state)
 		-- Add unchanged lines before this region
 		if is_pure_insert then
 			-- Include the anchor line BEFORE inserting new content
-			while base_pos <= rstart do
-				table.insert(result, snapshot_lines[base_pos] or "")
+			while base_pos <= rstart and base_pos <= #snapshot_lines do
+				table.insert(result, snapshot_lines[base_pos])
 				base_pos = base_pos + 1
 			end
 		else
-			while base_pos < rstart do
-				table.insert(result, snapshot_lines[base_pos] or "")
+			while base_pos < rstart and base_pos <= #snapshot_lines do
+				table.insert(result, snapshot_lines[base_pos])
 				base_pos = base_pos + 1
 			end
 		end
@@ -765,8 +765,8 @@ function M.show_preview()
 			end
 			has_old_content = true
 		else
-			-- Auto-merged modification/addition: show old version + keep/revert
-			local header = string.format("── [%s] keep  [%s] revert  [%s] close ──", k_accept, k_reject, k_quit)
+			-- Auto-merged modification/addition: show old version + revert option
+			local header = string.format("── [%s] revert  [%s] close ──", k_reject, k_quit)
 			table.insert(preview_lines, header)
 			table.insert(hl_ranges, { #preview_lines, "VibePreviewKeymap" })
 			if #(region.base_lines or {}) > 0 then
@@ -895,13 +895,10 @@ function M.show_preview()
 	if is_auto then
 		local is_sentinel = auto_aic and auto_aic.is_sentinel
 		review_keymaps.setup_preview(M.preview_bufnr, {
-			accept = function()
+			accept = is_sentinel and function()
 				M.close_preview()
-				if is_sentinel then
-					M.recover_auto_deletion(bufnr, idx)
-				end
-				-- For non-sentinel: "keep" = do nothing (already auto-merged)
-			end,
+				M.recover_auto_deletion(bufnr, idx)
+			end or nil,
 			reject = function()
 				M.close_preview()
 				if is_sentinel then

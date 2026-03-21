@@ -24,6 +24,20 @@ function M.prepare_review(user_lines, worktree_path, filepath, session_name, mer
 	-- Apply merge mode to determine auto-resolution
 	local summary = classifier.apply_merge_mode(classified_file.regions, merge_mode)
 
+	-- New AI files have no user content to merge with — always auto-resolve
+	local types = require("vibe.review.types")
+	if classified_file.file_status == types.FILE_NEW_AI then
+		for _, region in ipairs(classified_file.regions) do
+			if not region.auto_resolved then
+				region.auto_resolved = true
+				summary.auto_count = summary.auto_count + 1
+				if summary.review_count > 0 then
+					summary.review_count = summary.review_count - 1
+				end
+			end
+		end
+	end
+
 	-- Also produce git merge-file output for "edit manually" fallback
 	local merged_lines = M._run_merge_file(user_lines, worktree_path, filepath, session_name)
 
