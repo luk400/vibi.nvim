@@ -17,6 +17,7 @@ local M = {}
 ---@field created_at number Unix timestamp when session was created
 ---@field last_active number Unix timestamp of last activity
 ---@field has_terminal boolean Whether the terminal is currently active
+---@field log_path string|nil Path to the most recent scrollback log file
 ---@field addressed_hunks AddressedHunk[]|nil Hunks that have been explicitly addressed
 
 --- Get the path to the sessions file

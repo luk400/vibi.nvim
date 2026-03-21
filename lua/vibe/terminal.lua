@@ -56,6 +56,18 @@ local function dump_scrollback_log(session_bufnr, session_name)
 	local safe_name = session_name:gsub("[^%w_-]", "_")
 	local filename = string.format("%s/%s_%d.log", log_dir, safe_name, os.time())
 	vim.fn.writefile(lines, filename)
+	return filename
+end
+
+--- Dump scrollback for a named session (public wrapper)
+---@param session_name string
+---@return string|nil log_path
+function M.dump_scrollback_log(session_name)
+	local session = M.sessions[session_name]
+	if not session or not session.bufnr then
+		return nil
+	end
+	return dump_scrollback_log(session.bufnr, session_name)
 end
 
 ---@class TerminalSession
@@ -115,7 +127,7 @@ local function finalize_session(name, cwd, worktree_info)
 		job_id = vim.fn.termopen(config.options.command, {
 			cwd = worktree_info.worktree_path,
 			on_exit = function(_, exit_code)
-				dump_scrollback_log(bufnr, name)
+				local log_path = dump_scrollback_log(bufnr, name)
 				if exit_code ~= 0 then
 					vim.notify(string.format("[Vibe] Command exited with code %d", exit_code), vim.log.levels.WARN)
 				end
@@ -133,6 +145,7 @@ local function finalize_session(name, cwd, worktree_info)
 						created_at = worktree_info.created_at,
 						last_active = os.time(),
 						has_terminal = false,
+						log_path = log_path,
 					})
 				end
 			end,
@@ -275,6 +288,11 @@ function M.kill(name)
 		if session.winid and vim.api.nvim_win_is_valid(session.winid) then
 			vim.api.nvim_win_close(session.winid, true)
 		end
+		-- Dump scrollback BEFORE stopping job/deleting buffer to avoid race condition
+		-- (on_exit fires async after jobstop, but buf_delete may invalidate buffer first)
+		if session.bufnr and vim.api.nvim_buf_is_valid(session.bufnr) then
+			dump_scrollback_log(session.bufnr, name)
+		end
 		if session.job_id then
 			vim.fn.jobstop(session.job_id)
 		end
@@ -354,7 +372,7 @@ function M.resume(persisted_session)
 		job_id = vim.fn.termopen(config.options.command, {
 			cwd = persisted_session.worktree_path,
 			on_exit = function(_, exit_code)
-				dump_scrollback_log(bufnr, name)
+				local log_path = dump_scrollback_log(bufnr, name)
 				if exit_code ~= 0 then
 					vim.notify(string.format("[Vibe] Command exited with code %d", exit_code), vim.log.levels.WARN)
 				end
@@ -372,6 +390,7 @@ function M.resume(persisted_session)
 						created_at = persisted_session.created_at,
 						last_active = os.time(),
 						has_terminal = false,
+						log_path = log_path,
 					})
 				end
 			end,

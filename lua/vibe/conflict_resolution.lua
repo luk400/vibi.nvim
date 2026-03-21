@@ -25,7 +25,20 @@ local function strip_ansi(line)
 	return (line:gsub("\27%[[%d;]*[A-Za-z]", ""):gsub("\r", ""))
 end
 
+local function read_and_clean_log(filepath)
+	local raw_lines = vim.fn.readfile(filepath)
+	if not raw_lines or #raw_lines == 0 then
+		return nil
+	end
+	local cleaned = {}
+	for _, line in ipairs(raw_lines) do
+		table.insert(cleaned, strip_ansi(line))
+	end
+	return cleaned
+end
+
 function M.get_conversation_log(session_name)
+	-- Approach 1: Read from active terminal buffer
 	local session = terminal.sessions[session_name]
 	if session and session.bufnr and vim.api.nvim_buf_is_valid(session.bufnr) then
 		local ok, raw_lines = pcall(vim.api.nvim_buf_get_lines, session.bufnr, 0, -1, false)
@@ -38,6 +51,21 @@ function M.get_conversation_log(session_name)
 		end
 	end
 
+	-- Approach 2: Check persisted session data for stored log_path
+	local persist = require("vibe.persist")
+	local persisted_sessions = persist.load_sessions()
+	for _, ps in ipairs(persisted_sessions) do
+		if ps.name == session_name and ps.log_path then
+			if vim.fn.filereadable(ps.log_path) == 1 then
+				local cleaned = read_and_clean_log(ps.log_path)
+				if cleaned then
+					return cleaned
+				end
+			end
+		end
+	end
+
+	-- Approach 3: Glob for log files in vibe-logs directory
 	local log_dir = vim.fn.stdpath("data") .. "/vibe-logs"
 	if vim.fn.isdirectory(log_dir) == 1 then
 		local safe_name = session_name:gsub("[^%w_-]", "_")
@@ -45,12 +73,10 @@ function M.get_conversation_log(session_name)
 		local files = vim.fn.glob(pattern, false, true)
 		if #files > 0 then
 			table.sort(files)
-			local raw_lines = vim.fn.readfile(files[#files])
-			local cleaned = {}
-			for _, line in ipairs(raw_lines) do
-				table.insert(cleaned, strip_ansi(line))
+			local cleaned = read_and_clean_log(files[#files])
+			if cleaned then
+				return cleaned
 			end
-			return cleaned
 		end
 	end
 
@@ -62,15 +88,24 @@ function M.copy_conversation_logs(merge_worktree_path, selected_worktrees)
 	vim.fn.mkdir(conv_dir, "p")
 
 	local has_logs = {}
+	local total_found = 0
 	for _, info in ipairs(selected_worktrees) do
 		local log_lines = M.get_conversation_log(info.name)
 		if log_lines then
 			local safe_name = info.name:gsub("[^%w_-]", "_")
 			vim.fn.writefile(log_lines, conv_dir .. "/" .. safe_name .. ".log")
 			has_logs[info.name] = true
+			total_found = total_found + 1
 		else
 			has_logs[info.name] = false
+			vim.notify(
+				string.format("[Vibe] No conversation log found for worktree '%s'", info.name),
+				vim.log.levels.WARN
+			)
 		end
+	end
+	if total_found == 0 and #selected_worktrees > 0 then
+		vim.notify("[Vibe] No conversation logs found. Merge prompt will not reference logs.", vim.log.levels.WARN)
 	end
 	return has_logs
 end
@@ -150,6 +185,16 @@ function M.build_merge_prompt(contexts, has_logs)
 			lines,
 			"1. Read the conversation logs in ./worktree_conversations/ to understand what each worktree was doing"
 		)
+		table.insert(lines, "2. Change directory into the path of each worktree to make sure it doesn't contain uncommitted changes. If it does, add and commit them before continuing!")
+		table.insert(lines, "3. Merge each branch one at a time using: git merge <branch-name>")
+		table.insert(
+			lines,
+			"4. If a merge conflict occurs, resolve it by examining both sides and choosing the correct resolution"
+		)
+		table.insert(lines, "5. After all merges, verify the result makes sense")
+		table.insert(lines, "6. Only merge the branches listed above - do not merge any other branches")
+	else
+		table.insert(lines, "1. Change directory into the path of each worktree to make sure it doesn't contain uncommitted changes. If it does, add and commit them before continuing!")
 		table.insert(lines, "2. Merge each branch one at a time using: git merge <branch-name>")
 		table.insert(
 			lines,
@@ -157,14 +202,6 @@ function M.build_merge_prompt(contexts, has_logs)
 		)
 		table.insert(lines, "4. After all merges, verify the result makes sense")
 		table.insert(lines, "5. Only merge the branches listed above - do not merge any other branches")
-	else
-		table.insert(lines, "1. Merge each branch one at a time using: git merge <branch-name>")
-		table.insert(
-			lines,
-			"2. If a merge conflict occurs, resolve it by examining both sides and choosing the correct resolution"
-		)
-		table.insert(lines, "3. After all merges, verify the result makes sense")
-		table.insert(lines, "4. Only merge the branches listed above - do not merge any other branches")
 	end
 
 	return lines
@@ -240,6 +277,11 @@ function M.start_merge_session(all_worktrees, selected_map)
 		end
 		session.winid = require("vibe.window").create(session.bufnr, name)
 		vim.cmd("startinsert")
+
+		-- Proactively dump scrollback for source worktrees that are still active
+		for _, info in ipairs(selected_worktrees) do
+			terminal.dump_scrollback_log(info.name)
+		end
 
 		local has_logs = M.copy_conversation_logs(session.worktree_path, selected_worktrees)
 
