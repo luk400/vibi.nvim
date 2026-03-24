@@ -14,6 +14,8 @@ local KILL_HEADER_LINES = 2 -- Title + separator
 local KILL_LINES_PER_SESSION = 1 -- Single line per session
 local BROWSE_HEADER_LINES = 4 -- Title + separator + path + separator
 local BROWSE_LINES_PER_DIR = 1 -- One line per directory
+local SYNC_HEADER_LINES = 2 -- Title + separator
+local SYNC_LINES_PER_SESSION = 2 -- Name line + path line
 
 function M.list()
 	local sessions = {}
@@ -492,10 +494,47 @@ function M.pick_directory(callback)
 end
 
 function M.prompt_session_name(default, callback)
-	vim.ui.input({ prompt = "Session name: ", default = default }, function(input)
-		if not input or input == "" then
+	local default_text = default or ""
+	local bufnr = vim.api.nvim_create_buf(false, true)
+	vim.bo[bufnr].bufhidden = "wipe"
+	vim.bo[bufnr].buflisted = false
+
+	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { default_text })
+
+	local width = math.min(math.max(40, vim.fn.strdisplaywidth(default_text) + 10), vim.o.columns - 4)
+	local height = 1
+	local row = math.max(0, math.floor((vim.o.lines - height) / 2))
+	local col = math.max(0, math.floor((vim.o.columns - width) / 2))
+
+	local winid = vim.api.nvim_open_win(bufnr, true, {
+		relative = "editor",
+		row = row,
+		col = col,
+		width = width,
+		height = height,
+		style = "minimal",
+		border = "rounded",
+		title = " Session Name ",
+		title_pos = "center",
+		zindex = 60,
+	})
+
+	local closed = false
+	local function close()
+		if closed then
 			return
 		end
+		closed = true
+		if vim.api.nvim_win_is_valid(winid) then
+			vim.api.nvim_win_close(winid, true)
+		end
+		vim.cmd("stopinsert")
+	end
+
+	local function submit()
+		local lines = vim.api.nvim_buf_get_lines(bufnr, 0, 1, false)
+		local input = lines[1] or ""
+		close()
 		local name = input:gsub("^%s+", ""):gsub("%s+$", "")
 		if name == "" then
 			return
@@ -508,7 +547,236 @@ function M.prompt_session_name(default, callback)
 			return
 		end
 		callback(name)
-	end)
+	end
+
+	vim.keymap.set("i", "<CR>", submit, { buffer = bufnr, silent = true })
+	vim.keymap.set("n", "<CR>", submit, { buffer = bufnr, silent = true })
+	vim.keymap.set("i", "<Esc>", close, { buffer = bufnr, silent = true })
+	vim.keymap.set("n", "<Esc>", close, { buffer = bufnr, silent = true })
+	vim.keymap.set("n", "q", close, { buffer = bufnr, silent = true })
+
+	vim.api.nvim_create_autocmd("BufLeave", {
+		buffer = bufnr,
+		once = true,
+		callback = function()
+			close()
+		end,
+	})
+
+	vim.cmd("startinsert!")
+end
+
+function M.show_sync_selector()
+	local sessions = M.list()
+	if #sessions == 0 then
+		vim.notify("[Vibe] No active sessions", vim.log.levels.ERROR)
+		return
+	end
+
+	local selected = {}
+	for _, info in ipairs(sessions) do
+		selected[info.name] = true
+	end
+	local cursor_idx = 1
+
+	-- Check for unreviewed AI changes per session
+	local unreviewed = {}
+	for _, info in ipairs(sessions) do
+		local sess = terminal.sessions[info.name]
+		if sess and sess.worktree_path then
+			local files = git.get_unresolved_files(sess.worktree_path)
+			if #files > 0 then
+				unreviewed[info.name] = #files
+			end
+		end
+	end
+
+	local function build_lines()
+		local lines = {}
+		table.insert(lines, " Sync Sessions")
+		table.insert(lines, " " .. string.rep("-", 50))
+
+		for i, info in ipairs(sessions) do
+			local check = selected[info.name] and "x" or " "
+			local pointer = (i == cursor_idx) and ">" or " "
+			local icon = info.is_active and "◉" or (info.is_alive and "○" or "✗")
+			local warn = unreviewed[info.name]
+					and string.format("  ⚠ %d unreviewed", unreviewed[info.name])
+				or ""
+			table.insert(lines, string.format(" %s [%s] %s %s%s", pointer, check, icon, info.name, warn))
+			table.insert(lines, string.format("       %s", vim.fn.pathshorten(info.cwd)))
+		end
+
+		table.insert(lines, "")
+		local sel_count = vim.tbl_count(selected)
+		table.insert(
+			lines,
+			string.format(" %d selected  |  <Space> toggle  |  a all  |  <CR> sync  |  q cancel", sel_count)
+		)
+		return lines
+	end
+
+	local lines = build_lines()
+	local bufnr, winid, close = util.create_centered_float({
+		lines = lines,
+		filetype = "vibe_sync_select",
+		min_width = 60,
+		title = "Vibe: Sync",
+		cursorline = true,
+		zindex = 100,
+		no_default_keymaps = true,
+	})
+
+	local ns = vim.api.nvim_create_namespace("vibe_sync_select")
+
+	local function render()
+		local new_lines = build_lines()
+		vim.bo[bufnr].modifiable = true
+		vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, new_lines)
+		vim.bo[bufnr].modifiable = false
+
+		vim.api.nvim_buf_clear_namespace(bufnr, ns, 0, -1)
+		vim.api.nvim_buf_add_highlight(bufnr, ns, "Title", 0, 0, -1)
+		vim.api.nvim_buf_add_highlight(bufnr, ns, "Comment", 1, 0, -1)
+
+		for i, info in ipairs(sessions) do
+			local name_line = SYNC_HEADER_LINES + (i - 1) * SYNC_LINES_PER_SESSION
+			local path_line = name_line + 1
+			if unreviewed[info.name] then
+				vim.api.nvim_buf_add_highlight(bufnr, ns, "WarningMsg", name_line, 0, -1)
+			elseif selected[info.name] then
+				vim.api.nvim_buf_add_highlight(bufnr, ns, "String", name_line, 0, -1)
+			end
+			vim.api.nvim_buf_add_highlight(bufnr, ns, "Comment", path_line, 0, -1)
+		end
+
+		vim.api.nvim_buf_add_highlight(bufnr, ns, "Comment", #new_lines - 1, 0, -1)
+
+		if vim.api.nvim_win_is_valid(winid) then
+			local target_line = SYNC_HEADER_LINES + (cursor_idx - 1) * SYNC_LINES_PER_SESSION + 1
+			vim.api.nvim_win_set_cursor(winid, { target_line, 2 })
+		end
+	end
+
+	render()
+
+	local opts = { buffer = bufnr, silent = true }
+
+	local function move_down()
+		if cursor_idx < #sessions then
+			cursor_idx = cursor_idx + 1
+			render()
+		end
+	end
+
+	local function move_up()
+		if cursor_idx > 1 then
+			cursor_idx = cursor_idx - 1
+			render()
+		end
+	end
+
+	vim.keymap.set("n", "j", move_down, opts)
+	vim.keymap.set("n", "<Down>", move_down, opts)
+	vim.keymap.set("n", "k", move_up, opts)
+	vim.keymap.set("n", "<Up>", move_up, opts)
+
+	vim.keymap.set("n", "<Space>", function()
+		local info = sessions[cursor_idx]
+		if info then
+			if selected[info.name] then
+				selected[info.name] = nil
+			else
+				selected[info.name] = true
+			end
+			render()
+		end
+	end, opts)
+
+	vim.keymap.set("n", "a", function()
+		local all_selected = vim.tbl_count(selected) == #sessions
+		if all_selected then
+			selected = {}
+		else
+			for _, info in ipairs(sessions) do
+				selected[info.name] = true
+			end
+		end
+		render()
+	end, opts)
+
+	vim.keymap.set("n", "<CR>", function()
+		local sel_count = vim.tbl_count(selected)
+		if sel_count == 0 then
+			vim.notify("[Vibe] Select at least 1 session to sync", vim.log.levels.WARN)
+			return
+		end
+
+		-- Warn if any selected sessions have unreviewed AI changes
+		local warn_names = {}
+		for _, info in ipairs(sessions) do
+			if selected[info.name] and unreviewed[info.name] then
+				table.insert(
+					warn_names,
+					string.format("  • %s (%d unreviewed files)", info.name, unreviewed[info.name])
+				)
+			end
+		end
+
+		if #warn_names > 0 then
+			close()
+			local msg = "These sessions have unreviewed AI changes:\n"
+				.. table.concat(warn_names, "\n")
+				.. "\n\nSyncing may reset review progress. Continue?"
+			local choice = vim.fn.confirm(msg, "&No\n&Yes", 1, "Warning")
+			if choice ~= 2 then
+				return
+			end
+		else
+			close()
+		end
+
+		local success_count = 0
+		local fail_count = 0
+		local total_files = 0
+		for _, info in ipairs(sessions) do
+			if selected[info.name] then
+				local sess = terminal.sessions[info.name]
+				if sess and sess.worktree_path then
+					local ok, err, count = git.sync_local_to_worktree(sess.worktree_path)
+					if ok then
+						success_count = success_count + 1
+						total_files = total_files + (count or 0)
+					else
+						fail_count = fail_count + 1
+						vim.notify(
+							"[Vibe] Sync failed for '" .. info.name .. "': " .. (err or "unknown"),
+							vim.log.levels.ERROR
+						)
+					end
+				end
+			end
+		end
+
+		if fail_count == 0 then
+			if total_files > 0 then
+				vim.notify(
+					string.format("[Vibe] Synced %d file(s) across %d session(s)", total_files, success_count),
+					vim.log.levels.INFO
+				)
+			else
+				vim.notify("[Vibe] All sessions already in sync", vim.log.levels.INFO)
+			end
+		else
+			vim.notify(
+				string.format("[Vibe] Sync: %d succeeded, %d failed", success_count, fail_count),
+				vim.log.levels.WARN
+			)
+		end
+	end, opts)
+
+	vim.keymap.set("n", "q", close, opts)
+	vim.keymap.set("n", "<Esc>", close, opts)
 end
 
 function M.browse_directory(callback, start_path)

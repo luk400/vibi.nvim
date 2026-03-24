@@ -279,7 +279,7 @@ function M.setup(opts)
 			if #names == 1 then
 				session_name = names[1]
 			elseif #names > 1 then
-				vim.notify("[Vibe] Multiple sessions active. Specify: :VibeSync <name>", vim.log.levels.WARN)
+				session.show_sync_selector()
 				return
 			else
 				vim.notify("[Vibe] No active sessions", vim.log.levels.ERROR)
@@ -291,6 +291,19 @@ function M.setup(opts)
 		if not sess or not sess.worktree_path then
 			vim.notify("[Vibe] Session '" .. session_name .. "' not found", vim.log.levels.ERROR)
 			return
+		end
+
+		local unresolved = git.get_unresolved_files(sess.worktree_path)
+		if #unresolved > 0 then
+			local msg = string.format(
+				"Session '%s' has %d unreviewed AI change(s).\nSyncing may reset review progress. Continue?",
+				session_name,
+				#unresolved
+			)
+			local choice = vim.fn.confirm(msg, "&No\n&Yes", 1, "Warning")
+			if choice ~= 2 then
+				return
+			end
 		end
 
 		local ok, err, count = git.sync_local_to_worktree(sess.worktree_path)

@@ -19,11 +19,16 @@ function M.create_centered_float(opts)
 		width = math.max(width, vim.fn.strdisplaywidth(line))
 	end
 
-	-- Calculate height (fallback to opts.height if lines are populated dynamically later)
-	local height = opts.height or math.min(math.max(1, #lines), opts.max_height or 25)
+	-- Cap width to editor dimensions minus border + padding
+	local max_width = opts.max_width or (vim.o.columns - 4)
+	width = math.min(width, max_width)
 
-	local row = math.floor((vim.o.lines - height) / 2)
-	local col = math.floor((vim.o.columns - width) / 2)
+	-- Calculate height (fallback to opts.height if lines are populated dynamically later)
+	local max_height_limit = vim.o.lines - 4
+	local height = opts.height or math.min(math.max(1, #lines), math.min(opts.max_height or 25, max_height_limit))
+
+	local row = math.max(0, math.floor((vim.o.lines - height) / 2))
+	local col = math.max(0, math.floor((vim.o.columns - width) / 2))
 
 	local win_opts = {
 		relative = "editor",

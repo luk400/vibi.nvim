@@ -843,13 +843,23 @@ function M.show_preview()
 
 	local win_width = vim.api.nvim_win_get_width(0)
 	local win_height = vim.api.nvim_win_get_height(0)
-	local width = math.max(60, math.floor(win_width * 0.8))
-	local height = math.min(#preview_lines + 2, math.max(20, math.floor(win_height * 0.7)))
-	local needs_scroll = height < #preview_lines + 2
 
-	-- For keybinds-only previews (no old content), use a smaller window
-	if not has_old_content then
-		width = math.min(width, math.max(60, #preview_lines[1] + 4))
+	-- Compute content-aware width from all preview lines
+	local content_width = 60
+	for _, line in ipairs(preview_lines) do
+		content_width = math.max(content_width, vim.fn.strdisplaywidth(line))
+	end
+
+	local width, height, needs_scroll
+	if has_old_content then
+		-- Use the larger of 80% window width or content width, capped to window
+		width = math.max(math.floor(win_width * 0.8), content_width + 2)
+		width = math.min(width, win_width - 4)
+		height = math.min(#preview_lines + 2, math.max(20, math.floor(win_height * 0.7)))
+		needs_scroll = height < #preview_lines + 2
+	else
+		-- Keybind-only: size to content
+		width = math.max(60, math.min(content_width + 4, win_width - 4))
 		height = math.min(#preview_lines + 2, 5)
 		needs_scroll = false
 	end
@@ -1472,7 +1482,8 @@ function M.show_hint(bufnr, label)
 	pcall(vim.api.nvim_buf_add_highlight, M.hint_bufnr, ns_hint, "Comment", 0, key_end, -1)
 
 	local win_height = vim.api.nvim_win_get_height(0)
-	local hint_width = #hint_text
+	local win_width = vim.api.nvim_win_get_width(0)
+	local hint_width = math.min(vim.fn.strdisplaywidth(hint_text), win_width - 4)
 	local row = math.max(0, win_height - 3)
 	local col = 1
 
