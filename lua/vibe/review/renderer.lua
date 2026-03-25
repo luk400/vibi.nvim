@@ -218,6 +218,15 @@ function M.show_file(worktree_path, filepath, hunks, merge_mode)
 		)
 	else
 		-- All auto-merged: show buffer with highlights, let user inspect/edit
+		-- Jump to first auto-merged change
+		local first_aic = state.auto_item_contents[1]
+		if first_aic then
+			vim.api.nvim_win_set_cursor(0, { first_aic.buf_start_0 + 1, 0 })
+			vim.defer_fn(function()
+				M.show_preview()
+			end, 50)
+		end
+
 		local k_done = kd.get_key_or_fallback(bufnr, kd.DESC_DONE, "<leader>c")
 		vim.notify(
 			string.format(
@@ -1377,7 +1386,7 @@ function M.finalize_file(bufnr)
 	vim.fn.sign_unplace("vibe_review", { buffer = bufnr })
 	M.close_preview()
 	M.close_hint()
-	util.check_remaining_files(state.worktree_path)
+	util.check_remaining_files(state.worktree_path, state.merge_mode)
 end
 
 function M.setup_tracking(bufnr)

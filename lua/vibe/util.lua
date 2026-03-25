@@ -72,7 +72,7 @@ end
 
 --- Shared logic to check for remaining files
 ---@param worktree_path string
-function M.check_remaining_files(worktree_path)
+function M.check_remaining_files(worktree_path, review_mode)
 	local git = require("vibe.git")
 	local files = git.get_unresolved_files(worktree_path)
 
@@ -142,7 +142,7 @@ function M.check_remaining_files(worktree_path)
 
 	-- Show dialog with remaining unresolved files
 	vim.defer_fn(function()
-		require("vibe.dialog").show(worktree_path)
+		require("vibe.dialog").show(worktree_path, nil, review_mode)
 	end, 200)
 end
 
