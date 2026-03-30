@@ -403,12 +403,20 @@ function M.pick_directory(callback)
 		current_file_dir = vim.fn.getcwd()
 	end
 
+	local git_root = vim.fn.systemlist("git -C " .. vim.fn.shellescape(current_file_dir) .. " rev-parse --show-toplevel")[1]
+	if vim.v.shell_error ~= 0 then
+		git_root = nil
+	end
+
 	local options = {
 		{ label = "Current file directory", path = current_file_dir },
 		{ label = "Current working directory", path = vim.fn.getcwd() },
-		{ label = "Browse...", path = nil },
-		{ label = "Custom path...", path = nil },
 	}
+	if git_root then
+		table.insert(options, { label = "Repo root", path = git_root })
+	end
+	table.insert(options, { label = "Browse...", path = nil })
+	table.insert(options, { label = "Custom path...", path = nil })
 
 	local lines = { " Select Working Directory", " " .. string.rep("─", 50) }
 	for _, opt in ipairs(options) do
