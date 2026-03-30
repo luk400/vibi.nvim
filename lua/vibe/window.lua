@@ -127,6 +127,15 @@ function M.create(bufnr, session_name)
 				width = new_width,
 				height = new_height,
 			})
+			-- Neovim doesn't reliably propagate PTY resize to terminals in
+			-- floating windows, so explicitly resize the PTY after a short
+			-- delay to let the new window geometry settle.
+			local term_job_id = vim.b[bufnr].terminal_job_id
+			if term_job_id then
+				vim.defer_fn(function()
+					pcall(vim.fn.jobresize, term_job_id, new_width, new_height)
+				end, 50)
+			end
 		end,
 	})
 
