@@ -273,19 +273,11 @@ function M.setup(opts)
 
 	-- Create :VibeSync command to bulk-sync local changes to active worktree
 	vim.api.nvim_create_user_command("VibeSync", function(args)
-		local session_name = args.args ~= "" and args.args or terminal.current_session
-		if not session_name then
-			local names = vim.tbl_keys(terminal.sessions)
-			if #names == 1 then
-				session_name = names[1]
-			elseif #names > 1 then
-				session.show_sync_selector()
-				return
-			else
-				vim.notify("[Vibe] No active sessions", vim.log.levels.ERROR)
-				return
-			end
+		if args.args == "" then
+			session.show_sync_selector()
+			return
 		end
+		local session_name = args.args
 
 		local sess = terminal.sessions[session_name]
 		if not sess or not sess.worktree_path then

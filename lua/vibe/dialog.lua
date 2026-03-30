@@ -273,6 +273,11 @@ function M.render()
 	end
 	vim.api.nvim_buf_add_highlight(M.dialog_bufnr, -1, "VibeDialogFooter", footer_start, 0, -1)
 	vim.api.nvim_buf_add_highlight(M.dialog_bufnr, -1, "VibeDialogFooter", footer_start + 1, 0, -1)
+
+	-- Move cursor to selected line so the window scrolls to keep it visible
+	if M.dialog_winid and vim.api.nvim_win_is_valid(M.dialog_winid) then
+		vim.api.nvim_win_set_cursor(M.dialog_winid, { M.selected_idx + 2, 0 })
+	end
 end
 
 function M.setup_keymaps()
