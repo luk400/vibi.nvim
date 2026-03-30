@@ -208,4 +208,71 @@ function M.is_file_fully_addressed(worktrees, worktree_path, filepath, get_hunks
 	return addressed_count >= #hunks
 end
 
+--- Merge-aware file accept: uses 3-way merge instead of raw copy.
+--- Preserves user changes (e.g. from a previously merged session) that aren't in the worktree.
+---@param worktrees table Worktree registry
+---@param worktree_path string Path to worktree
+---@param filepath string Relative file path
+---@param merge_mode string "none"|"user"|"ai"|"both"
+---@param repo_root string|nil Repo root (derived from worktree info if nil)
+---@return boolean ok
+---@return string|nil error_reason ("conflicts" when conflicts exist)
+---@return number conflict_count
+function M.merge_accept_file(worktrees, worktree_path, filepath, merge_mode, repo_root)
+	local merge = require("vibe.review.merge")
+	local info = worktrees[worktree_path]
+	if not info then
+		return false, "Worktree info not found", 0
+	end
+	repo_root = repo_root or info.repo_root
+
+	local result = merge.merge_file(worktree_path, filepath, repo_root, merge_mode)
+
+	-- File already in desired state (e.g. both deleted, user-only new file)
+	if result.auto_accept then
+		return true, nil, 0
+	end
+
+	-- Conflicts present — caller should open per-file review
+	if result.has_conflicts then
+		return false, "conflicts", result.stats.conflict_count
+	end
+
+	-- Apply the merged result
+	M.apply_classified_resolution(worktrees, worktree_path, filepath, result.resolved_lines)
+	return true, nil, 0
+end
+
+--- Merge-aware batch accept: uses 3-way merge for each file.
+--- Files with conflicts are skipped (not overwritten).
+---@param worktrees table Worktree registry
+---@param worktree_path string Path to worktree
+---@param get_changed_files_fn function Returns list of changed file paths
+---@param merge_mode string "none"|"user"|"ai"|"both"
+---@return table { accepted: string[], skipped: table[], errors: table[], all_ok: boolean }
+function M.merge_accept_all(worktrees, worktree_path, get_changed_files_fn, merge_mode)
+	local accepted = {}
+	local skipped = {}
+	local errors = {}
+
+	local files = get_changed_files_fn(worktree_path)
+	for _, filepath in ipairs(files) do
+		local ok, err, conflict_count = M.merge_accept_file(worktrees, worktree_path, filepath, merge_mode)
+		if ok then
+			table.insert(accepted, filepath)
+		elseif err == "conflicts" then
+			table.insert(skipped, { filepath = filepath, conflicts = conflict_count })
+		else
+			table.insert(errors, { filepath = filepath, error = err })
+		end
+	end
+
+	return {
+		accepted = accepted,
+		skipped = skipped,
+		errors = errors,
+		all_ok = #skipped == 0 and #errors == 0,
+	}
+end
+
 return M

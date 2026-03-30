@@ -66,6 +66,14 @@ function M.accept_all_from_worktree(worktree_path)
 	return apply.accept_all_from_worktree(M.worktrees, worktree_path, M.get_worktree_changed_files)
 end
 
+function M.merge_accept_file(worktree_path, filepath, merge_mode, repo_root)
+	return apply.merge_accept_file(M.worktrees, worktree_path, filepath, merge_mode, repo_root)
+end
+
+function M.merge_accept_all(worktree_path, merge_mode)
+	return apply.merge_accept_all(M.worktrees, worktree_path, M.get_unresolved_files, merge_mode)
+end
+
 function M.mark_hunk_addressed(worktree_path, filepath, hunk, action)
 	return apply.mark_hunk_addressed(M.worktrees, worktree_path, filepath, hunk, action)
 end

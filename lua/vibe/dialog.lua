@@ -145,6 +145,7 @@ function M.show(worktree_path, worktree_info, review_mode)
 
 	M.render()
 	M.setup_keymaps()
+	M.detect_overlapping_sessions()
 end
 
 function M.close()
@@ -314,7 +315,7 @@ function M.setup_keymaps()
 	vim.keymap.set("n", "<CR>", M.jump_to_file, opts)
 	vim.keymap.set("n", "A", M.accept_all, opts)
 
-	-- File-level accept: copy worktree version, mark all hunks addressed
+	-- File-level accept: 3-way merge (preserves changes from other sessions)
 	vim.keymap.set("n", "<leader>a", function()
 		if #M.changed_files == 0 then
 			return
@@ -323,22 +324,33 @@ function M.setup_keymaps()
 		if not file or not M.current_worktree_path then
 			return
 		end
-		local ok, err = git.accept_file_from_worktree(M.current_worktree_path, file)
-		if not ok then
-			vim.notify("[Vibe] Failed to accept: " .. (err or ""), vim.log.levels.ERROR)
-			return
-		end
-		-- Mark all hunks for this file as addressed
-		local info = git.get_worktree_info(M.current_worktree_path)
-		if info then
-			local hunks = git.get_worktree_file_hunks(M.current_worktree_path, file, info.repo_root .. "/" .. file)
-			for _, hunk in ipairs(hunks or {}) do
-				git.mark_hunk_addressed(M.current_worktree_path, file, hunk, "accepted")
+		local ok, err, conflict_count = git.merge_accept_file(
+			M.current_worktree_path, file, M.review_mode
+		)
+		if ok then
+			vim.notify("[Vibe] File accepted (merged): " .. file, vim.log.levels.INFO)
+			M.refresh()
+		elseif err == "conflicts" then
+			vim.notify(
+				string.format("[Vibe] %s has %d conflict(s) - opening review", file, conflict_count),
+				vim.log.levels.WARN
+			)
+			local worktree_path = M.current_worktree_path
+			local review_mode = M.review_mode
+			M.close()
+			local info = git.get_worktree_info(worktree_path)
+			if info then
+				local user_file_path = info.repo_root .. "/" .. file
+				local dir = vim.fn.fnamemodify(user_file_path, ":h")
+				if vim.fn.isdirectory(dir) == 0 then
+					vim.fn.mkdir(dir, "p")
+				end
+				vim.cmd("edit " .. vim.fn.fnameescape(user_file_path))
+				require("vibe.diff").show_for_file(worktree_path, file, review_mode)
 			end
+		else
+			vim.notify("[Vibe] Failed to accept: " .. (err or ""), vim.log.levels.ERROR)
 		end
-		git.sync_resolved_file(M.current_worktree_path, file, (info and info.repo_root or "") .. "/" .. file)
-		vim.notify("[Vibe] File accepted: " .. file, vim.log.levels.INFO)
-		M.refresh()
 	end, vim.tbl_extend("force", opts, { desc = "Accept file" }))
 
 	-- File-level reject: keep user version, mark all hunks addressed
@@ -417,27 +429,89 @@ function M.accept_all()
 	end
 	local file_count = #M.changed_files
 	if vim.fn.confirm(
-		string.format("Accept ALL changes in %d file(s)? This cannot be undone.", file_count),
+		string.format("Merge ALL changes in %d file(s)? This cannot be undone.", file_count),
 		"&Yes\n&No",
 		2
 	) ~= 1 then
 		return
 	end
-	local ok, err = git.accept_all_from_worktree(M.current_worktree_path)
-	if not ok then
-		vim.notify("[Vibe] Failed to accept all: " .. (err or "unknown error"), vim.log.levels.ERROR)
+
+	local result = git.merge_accept_all(M.current_worktree_path, M.review_mode)
+
+	if result.all_ok then
+		git.update_snapshot(M.current_worktree_path)
+		M.close()
+		vim.notify(
+			string.format("[Vibe] All %d file(s) merged successfully.", #result.accepted),
+			vim.log.levels.INFO
+		)
+		local session = require("vibe.session")
+		vim.defer_fn(function()
+			session.show_review_list()
+		end, 100)
+	else
+		local msg_parts = {}
+		if #result.accepted > 0 then
+			table.insert(msg_parts, string.format("%d file(s) merged", #result.accepted))
+		end
+		if #result.skipped > 0 then
+			table.insert(msg_parts, string.format("%d file(s) have conflicts", #result.skipped))
+		end
+		if #result.errors > 0 then
+			table.insert(msg_parts, string.format("%d file(s) failed", #result.errors))
+		end
+		vim.notify(
+			"[Vibe] " .. table.concat(msg_parts, ", ") .. ". Review remaining files.",
+			#result.errors > 0 and vim.log.levels.ERROR or vim.log.levels.WARN
+		)
+		M.refresh()
+	end
+end
+
+function M.detect_overlapping_sessions()
+	if not M.current_worktree_path or #M.changed_files == 0 then
 		return
 	end
 
-	git.update_snapshot(M.current_worktree_path)
+	local all_worktrees = git.get_worktrees_with_changes()
+	local overlapping = {}
 
-	M.close()
-	vim.notify("[Vibe] All changes accepted. Agent may continue working.", vim.log.levels.INFO)
+	for _, wt_info in ipairs(all_worktrees) do
+		if wt_info.worktree_path ~= M.current_worktree_path then
+			local other_files = git.get_worktree_changed_files(wt_info.worktree_path)
+			local other_set = {}
+			for _, f in ipairs(other_files) do
+				other_set[f] = true
+			end
+			local shared_count = 0
+			for _, f in ipairs(M.changed_files) do
+				if other_set[f] then
+					shared_count = shared_count + 1
+				end
+			end
+			if shared_count > 0 then
+				table.insert(overlapping, {
+					name = wt_info.name,
+					count = shared_count,
+				})
+			end
+		end
+	end
 
-	local session = require("vibe.session")
-	vim.defer_fn(function()
-		session.show_review_list()
-	end, 100)
+	if #overlapping > 0 then
+		local parts = {}
+		for _, ov in ipairs(overlapping) do
+			table.insert(parts, string.format("'%s' (%d file(s))", ov.name, ov.count))
+		end
+		vim.defer_fn(function()
+			vim.notify(
+				"[Vibe] Overlapping files with session(s): "
+					.. table.concat(parts, ", ")
+					.. ". Use merge review (Enter) for safe merging.",
+				vim.log.levels.WARN
+			)
+		end, 50)
+	end
 end
 
 function M.get_current_worktree()
