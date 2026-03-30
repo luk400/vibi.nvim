@@ -110,9 +110,30 @@ function M.create(bufnr, session_name)
 		cycle_session(-1)
 	end, { buffer = bufnr, silent = true, desc = "Previous Vibe session" })
 
+	local resize_group = vim.api.nvim_create_augroup("VibeWindowResize" .. winid, { clear = true })
+
+	vim.api.nvim_create_autocmd("VimResized", {
+		group = resize_group,
+		callback = function()
+			if not vim.api.nvim_win_is_valid(winid) then
+				vim.api.nvim_del_augroup_by_id(resize_group)
+				return
+			end
+			local new_row, new_col, new_width, new_height = calculate_dimensions(opts.position)
+			vim.api.nvim_win_set_config(winid, {
+				relative = "editor",
+				row = new_row,
+				col = new_col,
+				width = new_width,
+				height = new_height,
+			})
+		end,
+	})
+
 	vim.api.nvim_create_autocmd("WinClosed", {
 		pattern = tostring(winid),
 		callback = function()
+			pcall(vim.api.nvim_del_augroup_by_id, resize_group)
 			require("vibe.terminal").on_window_closed()
 		end,
 		once = true,
