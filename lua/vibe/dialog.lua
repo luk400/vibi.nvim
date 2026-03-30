@@ -130,7 +130,7 @@ function M.show(worktree_path, worktree_info, review_mode)
 
 	local bufnr, winid, close = util.create_centered_float({
 		filetype = "vibe_dialog",
-		min_width = math.max(60, math.floor(vim.o.columns * 0.5)),
+		min_width = math.max(74, math.floor(vim.o.columns * 0.5)),
 		height = target_height,
 		title = "Vibe: Modified Files (" .. info.name .. ")",
 		cursorline = true,
