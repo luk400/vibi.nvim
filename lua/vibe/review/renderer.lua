@@ -219,6 +219,7 @@ function M.show_file(worktree_path, filepath, hunks, merge_mode)
 	else
 		-- All auto-merged: show buffer with highlights, let user inspect/edit
 		-- Jump to first auto-merged change
+		local state = M.buffer_state[bufnr]
 		local first_aic = state.auto_item_contents[1]
 		if first_aic then
 			vim.api.nvim_win_set_cursor(0, { first_aic.buf_start_0 + 1, 0 })

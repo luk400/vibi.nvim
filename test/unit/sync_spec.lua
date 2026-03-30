@@ -105,12 +105,12 @@ describe("sync_local_to_worktree", function()
 		eq("updated data", wt_content, "worktree should have updated untracked content")
 	end)
 
-	it("skips untracked file NOT in worktree", function()
+	it("syncs untracked file not yet in worktree", function()
 		local repo_path = helpers.create_test_repo("sync-untracked-absent", {
 			["tracked.txt"] = "tracked",
 		})
 
-		local info = git.create_worktree("sync-skip-untracked-test", repo_path)
+		local info = git.create_worktree("sync-untracked-new-test", repo_path)
 		assert.is_not_nil(info)
 
 		-- Add untracked file locally only (not in worktree)
@@ -119,9 +119,34 @@ describe("sync_local_to_worktree", function()
 		local ok, err, count = git.sync_local_to_worktree(info.worktree_path)
 		is_true(ok, "sync should succeed")
 		assert.is_nil(err)
+		eq(1, count, "should sync 1 file")
+
+		eq(1, vim.fn.filereadable(info.worktree_path .. "/local_only.txt"), "untracked file should appear in worktree")
+		local content = table.concat(vim.fn.readfile(info.worktree_path .. "/local_only.txt"), "\n")
+		eq("local only content", content)
+	end)
+
+	it("skips gitignored untracked file", function()
+		local repo_path = helpers.create_test_repo("sync-gitignored", {
+			["tracked.txt"] = "tracked",
+			[".gitignore"] = "*.log\nbuild/\n",
+		})
+
+		local info = git.create_worktree("sync-gitignored-test", repo_path)
+		assert.is_not_nil(info)
+
+		-- Add gitignored files locally
+		helpers.write_file(repo_path .. "/debug.log", "log output")
+		vim.fn.mkdir(repo_path .. "/build", "p")
+		helpers.write_file(repo_path .. "/build/output.js", "built code")
+
+		local ok, err, count = git.sync_local_to_worktree(info.worktree_path)
+		is_true(ok, "sync should succeed")
+		assert.is_nil(err)
 		eq(0, count, "should sync 0 files")
 
-		eq(0, vim.fn.filereadable(info.worktree_path .. "/local_only.txt"), "untracked file should NOT appear in worktree")
+		eq(0, vim.fn.filereadable(info.worktree_path .. "/debug.log"), "gitignored file should NOT appear in worktree")
+		eq(0, vim.fn.filereadable(info.worktree_path .. "/build/output.js"), "gitignored dir should NOT appear in worktree")
 	end)
 
 	it("updates snapshot_commit", function()
