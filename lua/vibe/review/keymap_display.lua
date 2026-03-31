@@ -19,19 +19,19 @@ M.DESC_DONE = "Accept file and continue"
 ---@param lhs string Raw lhs from nvim_buf_get_keymap (leader already expanded)
 ---@return string Formatted display string
 function M.format_key_display(lhs)
-	local leader = vim.g.mapleader
-	if leader == nil then
-		leader = "\\"
-	end
-	-- Normalise: nvim_buf_get_keymap returns lhs with leader expanded.
-	-- A space leader is stored as " ", other leaders as their literal char.
-	if type(leader) == "string" and #leader > 0 then
-		-- Check if lhs starts with the expanded leader
-		if lhs:sub(1, #leader) == leader then
-			return "<leader>" .. lhs:sub(#leader + 1)
-		end
-	end
-	return lhs
+    local leader = vim.g.mapleader
+    if leader == nil then
+        leader = "\\"
+    end
+    -- Normalise: nvim_buf_get_keymap returns lhs with leader expanded.
+    -- A space leader is stored as " ", other leaders as their literal char.
+    if type(leader) == "string" and #leader > 0 then
+        -- Check if lhs starts with the expanded leader
+        if lhs:sub(1, #leader) == leader then
+            return "<leader>" .. lhs:sub(#leader + 1)
+        end
+    end
+    return lhs
 end
 
 --- Look up the key bound to a given desc on a buffer
@@ -39,13 +39,13 @@ end
 ---@param desc string The desc field to match
 ---@return string|nil Formatted key display, or nil if not found
 function M.get_key_for_desc(bufnr, desc)
-	local maps = vim.api.nvim_buf_get_keymap(bufnr, "n")
-	for _, map in ipairs(maps) do
-		if map.desc == desc then
-			return M.format_key_display(map.lhs)
-		end
-	end
-	return nil
+    local maps = vim.api.nvim_buf_get_keymap(bufnr, "n")
+    for _, map in ipairs(maps) do
+        if map.desc == desc then
+            return M.format_key_display(map.lhs)
+        end
+    end
+    return nil
 end
 
 --- Look up key with a fallback for robustness
@@ -54,7 +54,7 @@ end
 ---@param fallback string Fallback display string
 ---@return string Key display string
 function M.get_key_or_fallback(bufnr, desc, fallback)
-	return M.get_key_for_desc(bufnr, desc) or fallback
+    return M.get_key_for_desc(bufnr, desc) or fallback
 end
 
 return M

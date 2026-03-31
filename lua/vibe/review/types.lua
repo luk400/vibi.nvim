@@ -37,60 +37,60 @@ M.FILE_DELETE_CONFLICT_AI_MOD = "delete_conflict_ai_mod"
 ---@param merge_mode string One of the merge mode constants
 ---@return boolean
 function M.should_auto_resolve(classification, merge_mode)
-	if classification == M.CONFLICT then
-		return false
-	end
-	if classification == M.UNCHANGED then
-		return true
-	end
+    if classification == M.CONFLICT then
+        return false
+    end
+    if classification == M.UNCHANGED then
+        return true
+    end
 
-	-- Decision table:
-	--              none    user    ai      both
-	-- USER_ONLY    false   true    false   true
-	-- AI_ONLY      false   false   true    true
-	-- CONVERGENT   false   true    true    true
-	local table_lookup = {
-		[M.USER_ONLY] = {
-			[M.MODE_NONE] = false,
-			[M.MODE_USER] = true,
-			[M.MODE_AI] = false,
-			[M.MODE_BOTH] = true,
-		},
-		[M.AI_ONLY] = {
-			[M.MODE_NONE] = false,
-			[M.MODE_USER] = false,
-			[M.MODE_AI] = true,
-			[M.MODE_BOTH] = true,
-		},
-		[M.CONVERGENT] = {
-			[M.MODE_NONE] = false,
-			[M.MODE_USER] = true,
-			[M.MODE_AI] = true,
-			[M.MODE_BOTH] = true,
-		},
-	}
+    -- Decision table:
+    --              none    user    ai      both
+    -- USER_ONLY    false   true    false   true
+    -- AI_ONLY      false   false   true    true
+    -- CONVERGENT   false   true    true    true
+    local table_lookup = {
+        [M.USER_ONLY] = {
+            [M.MODE_NONE] = false,
+            [M.MODE_USER] = true,
+            [M.MODE_AI] = false,
+            [M.MODE_BOTH] = true,
+        },
+        [M.AI_ONLY] = {
+            [M.MODE_NONE] = false,
+            [M.MODE_USER] = false,
+            [M.MODE_AI] = true,
+            [M.MODE_BOTH] = true,
+        },
+        [M.CONVERGENT] = {
+            [M.MODE_NONE] = false,
+            [M.MODE_USER] = true,
+            [M.MODE_AI] = true,
+            [M.MODE_BOTH] = true,
+        },
+    }
 
-	local row = table_lookup[classification]
-	if row then
-		return row[merge_mode] or false
-	end
-	return false
+    local row = table_lookup[classification]
+    if row then
+        return row[merge_mode] or false
+    end
+    return false
 end
 
 --- Mode display labels for UI
 M.mode_labels = {
-	[M.MODE_BOTH] = "Auto-Merge All",
-	[M.MODE_USER] = "Auto-Merge User",
-	[M.MODE_AI] = "Auto-Merge AI",
-	[M.MODE_NONE] = "Review All",
+    [M.MODE_BOTH] = "Auto-Merge All",
+    [M.MODE_USER] = "Auto-Merge User",
+    [M.MODE_AI] = "Auto-Merge AI",
+    [M.MODE_NONE] = "Review All",
 }
 
 --- Classification display info for UI
 M.classification_info = {
-	[M.USER_ONLY] = { label = "Your change", short = "yours", color = "VibeRegionSuggestion" },
-	[M.AI_ONLY] = { label = "AI suggestion", short = "AI", color = "VibeRegionSuggestion" },
-	[M.CONVERGENT] = { label = "Both agree", short = "agreed", color = "VibeRegionConvergent" },
-	[M.CONFLICT] = { label = "Conflict", short = "conflict", color = "VibeRegionConflict" },
+    [M.USER_ONLY] = { label = "Your change", short = "yours", color = "VibeRegionSuggestion" },
+    [M.AI_ONLY] = { label = "AI suggestion", short = "AI", color = "VibeRegionSuggestion" },
+    [M.CONVERGENT] = { label = "Both agree", short = "agreed", color = "VibeRegionConvergent" },
+    [M.CONFLICT] = { label = "Conflict", short = "conflict", color = "VibeRegionConflict" },
 }
 
 return M
