@@ -29,6 +29,18 @@ describe("config validation", function()
         end
     end)
 
+    it("falls back to 'float' for invalid window_mode", function()
+        config.setup({ window_mode = "popup" })
+        assert.equals("float", config.options.window_mode)
+    end)
+
+    it("accepts valid window_mode values", function()
+        for _, mode in ipairs({ "float", "split" }) do
+            config.setup({ window_mode = mode })
+            assert.equals(mode, config.options.window_mode)
+        end
+    end)
+
     it("deep-merges diff sub-tables", function()
         config.setup({ diff = { poll_interval = 1000 } })
         assert.equals(1000, config.options.diff.poll_interval)

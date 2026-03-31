@@ -882,7 +882,7 @@ function M.sync_local_to_worktree(worktree_path)
         if file ~= "" then
             local local_path = repo_root .. "/" .. file
             local wt_path = worktree_path .. "/" .. file
-            if files_differ(local_path, wt_path) then
+            if vim.fn.filereadable(wt_path) == 1 and files_differ(local_path, wt_path) then
                 table.insert(sync_list, file)
             end
         end

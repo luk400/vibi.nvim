@@ -27,6 +27,7 @@ local M = {}
 ---@class VibeConfig
 ---@field command string Command to run in the terminal
 ---@field position string Window position: "right", "left", "centered", "top", "bottom"
+---@field window_mode "float"|"split" Window mode: "float" (floating window) or "split" (vim split)
 ---@field width number Width as fraction of screen (for left/right/centered)
 ---@field height number Height as fraction of screen (for top/bottom/centered)
 ---@field keymap string|false Keybinding to toggle vibe window
@@ -42,6 +43,7 @@ local M = {}
 M.defaults = {
     command = "claude",
     position = "right",
+    window_mode = "float",
     width = 0.5,
     height = 0.8,
     keymap = "<leader>v",
@@ -129,6 +131,15 @@ local function validate_options(options)
             vim.log.levels.WARN
         )
         options.position = "right"
+    end
+
+    local valid_window_modes = { float = true, split = true }
+    if options.window_mode and not valid_window_modes[options.window_mode] then
+        vim.notify(
+            string.format("[Vibe] Invalid window_mode '%s', falling back to 'float'", options.window_mode),
+            vim.log.levels.WARN
+        )
+        options.window_mode = "float"
     end
 
     if options.width and (type(options.width) ~= "number" or options.width <= 0 or options.width > 1) then

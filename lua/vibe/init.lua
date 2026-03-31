@@ -62,7 +62,7 @@ function M.setup(opts)
         smart_vibe(args.args)
     end, {
         nargs = "?",
-        desc = "Toggle Vibe floating terminal",
+        desc = "Toggle Vibe terminal",
         complete = function(_, _, _)
             return vim.tbl_keys(terminal.sessions)
         end,
@@ -368,17 +368,25 @@ function M.setup_quit_protection()
     vim.api.nvim_create_autocmd("QuitPre", {
         group = group,
         callback = function()
-            -- Skip when closing a floating window (e.g. the :Vibe terminal)
+            -- Skip when closing a Vibe terminal window (float or split)
             local cur_win = vim.api.nvim_get_current_win()
+            local cur_buf = vim.api.nvim_win_get_buf(cur_win)
+            if vim.bo[cur_buf].filetype == "vibe" then
+                return
+            end
+            -- Also skip other floating windows
             if vim.api.nvim_win_get_config(cur_win).relative ~= "" then
                 return
             end
 
-            -- Only intervene when closing the last real (non-floating) window
+            -- Only intervene when closing the last real (non-floating, non-Vibe) window
             local non_float_wins = 0
             for _, w in ipairs(vim.api.nvim_list_wins()) do
                 if vim.api.nvim_win_get_config(w).relative == "" then
-                    non_float_wins = non_float_wins + 1
+                    local buf = vim.api.nvim_win_get_buf(w)
+                    if vim.bo[buf].filetype ~= "vibe" then
+                        non_float_wins = non_float_wins + 1
+                    end
                 end
             end
             if non_float_wins > 1 then

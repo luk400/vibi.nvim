@@ -105,7 +105,7 @@ describe("sync_local_to_worktree", function()
         eq("updated data", wt_content, "worktree should have updated untracked content")
     end)
 
-    it("syncs untracked file not yet in worktree", function()
+    it("skips untracked file not yet in worktree", function()
         local repo_path = helpers.create_test_repo("sync-untracked-absent", {
             ["tracked.txt"] = "tracked",
         })
@@ -119,11 +119,10 @@ describe("sync_local_to_worktree", function()
         local ok, err, count = git.sync_local_to_worktree(info.worktree_path)
         is_true(ok, "sync should succeed")
         assert.is_nil(err)
-        eq(1, count, "should sync 1 file")
+        eq(0, count, "should sync 0 files")
 
-        eq(1, vim.fn.filereadable(info.worktree_path .. "/local_only.txt"), "untracked file should appear in worktree")
-        local content = table.concat(vim.fn.readfile(info.worktree_path .. "/local_only.txt"), "\n")
-        eq("local only content", content)
+        eq(0, vim.fn.filereadable(info.worktree_path .. "/local_only.txt"),
+            "untracked file should NOT appear in worktree")
     end)
 
     it("skips gitignored untracked file", function()
