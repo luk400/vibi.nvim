@@ -29,6 +29,7 @@ This means the AI edits a "shadow" copy of your codebase. Your actual files rema
 *   **Lualine Statusline:** `require("vibe").statusline` shows active/total session counts.
 *   **Context-Sensitive Help:** `:VibeHelp` shows relevant keymaps for the current buffer context.
 *   **Agent Grid:** Display all sessions simultaneously in a grid layout with `enable_agent_grid = true`.
+*   **Grid Maximize:** Toggle-maximize a single grid cell to fill the entire grid area with `<leader>m`.
 *   **Session Picker:** Quick-jump to any grid session via `<leader>s` floating picker.
 *   **Grid-Aware Conflict Resolution:** `:VibeConflictResolution` integrates merge sessions into the agent grid when enabled.
 *   **Auto-Scroll:** Terminal buffers automatically scroll to follow new output when you're editing in another window (`auto_scroll = true` by default).
@@ -182,6 +183,7 @@ require("vibe").setup({
   enable_agent_grid = false, -- Set to true to enable grid mode
   agent_grid = {
     max_sessions = 9,        -- Max sessions per grid page (paginated beyond this)
+    maximize_keymap = "<leader>m", -- Toggle maximize focused cell (false to disable)
   },
 
   worktree = {
@@ -283,7 +285,7 @@ require("vibe").setup({
 ### Terminal Window
 
 *   `q` / `<Esc>`: Close terminal window
-*   `<M-h/j/k/l>`: Navigate to adjacent windows
+*   `<leader>h/j/k/l`: Navigate to adjacent windows
 *   `<C-n>` / `<C-p>`: Cycle between sessions
 
 ### Diff / Review (File Buffers)
@@ -330,6 +332,7 @@ require("vibe").setup({
     enable_agent_grid = true,
     agent_grid = {
         max_sessions = 9, -- Max sessions per grid page (default: 9)
+        maximize_keymap = "<leader>m", -- Toggle maximize (default, false to disable)
     },
 })
 ```
@@ -342,19 +345,22 @@ require("vibe").setup({
 *   **Grid layout:** Sessions are arranged in an auto-calculated grid (e.g., 2 sessions = 2x1 column, 4 = 2x2 grid). All cells have equal dimensions and fill the right half of the screen.
 *   **Window modes:** Works with both `window_mode = "float"` (grid of floating windows) and `window_mode = "split"` (grid of Neovim splits).
 *   **Pagination:** When the number of sessions exceeds `max_sessions`, the grid paginates. Use `<C-n>` / `<C-p>` in terminal mode to cycle between pages. A page indicator (`[1/3]`) appears in the first cell's title.
+*   **Maximize:** Press `<leader>m` (configurable via `agent_grid.maximize_keymap`) while focused on a grid cell to maximize it to fill the entire grid area. Press again to restore the normal grid layout. The session picker (`<leader>s`) switches between sessions while maximized.
 
 ### Grid Keymaps
 
 | Mode | Key | Action |
 |------|-----|--------|
-| Terminal | `<M-h/j/k/l>` | Navigate between grid cells |
+| Terminal | `<leader>h/j/k/l` | Navigate between grid cells |
 | Terminal | `<C-n>` | Next grid page (when paginated) |
 | Terminal | `<C-p>` | Previous grid page (when paginated) |
 | Terminal | `<leader>s` | Open session picker (quick-jump) |
+| Terminal | `<leader>m` | Toggle maximize current cell |
 | Terminal | `<Esc><Esc>` | Exit terminal mode |
 | Normal | `q` / `<Esc>` | Hide entire grid |
 | Normal | `<leader>v` | Toggle grid |
 | Normal | `<leader>s` | Open session picker (quick-jump) |
+| Normal | `<leader>m` | Toggle maximize current cell |
 
 When the grid is hidden, all sessions continue running in the background. Show the grid again with `<leader>v` or `:VibeGrid`.
 

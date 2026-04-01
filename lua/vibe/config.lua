@@ -5,6 +5,7 @@ local M = {}
 
 ---@class VibeAgentGridConfig
 ---@field max_sessions integer Maximum sessions shown per grid page (default 9)
+---@field maximize_keymap string|false Keybinding to toggle maximize in grid mode (default "<leader>m")
 
 ---@class VibeWorktreeConfig
 ---@field worktree_dir string|nil Custom directory for worktrees (defaults to stdpath("cache") .. "/vibe-worktrees")
@@ -91,6 +92,7 @@ M.defaults = {
     enable_agent_grid = false,
     agent_grid = {
         max_sessions = 9,
+        maximize_keymap = "<leader>m",
     },
     auto_scroll = true,
     worktree = {

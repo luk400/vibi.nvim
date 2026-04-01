@@ -713,7 +713,7 @@ function M.show_preview()
     local hl_ranges = {} -- {line_idx, hl_group}
     local has_old_content = false
 
-    local k_keep = kd.get_key_or_fallback(bufnr, kd.DESC_KEEP_YOURS, "<leader>k")
+    local k_keep = kd.get_key_or_fallback(bufnr, kd.DESC_KEEP_YOURS, "<leader>K")
     local k_accept = kd.get_key_or_fallback(bufnr, kd.DESC_ACCEPT, "<leader>a")
     local k_reject = kd.get_key_or_fallback(bufnr, kd.DESC_REJECT, "<leader>r")
     local k_edit = kd.get_key_or_fallback(bufnr, kd.DESC_EDIT, "<leader>e")

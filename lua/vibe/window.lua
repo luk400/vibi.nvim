@@ -227,10 +227,10 @@ function M.create(bufnr, session_name)
 
     -- Terminal-mode keymaps
     vim.keymap.set("t", "<Esc><Esc>", "<C-\\><C-N>", { buffer = bufnr, silent = true, desc = "Exit terminal mode" })
-    vim.keymap.set("t", "<M-h>", "<C-\\><C-N><C-w>h", { buffer = bufnr, silent = true, desc = "Go to left window" })
-    vim.keymap.set("t", "<M-j>", "<C-\\><C-N><C-w>j", { buffer = bufnr, silent = true, desc = "Go to below window" })
-    vim.keymap.set("t", "<M-k>", "<C-\\><C-N><C-w>k", { buffer = bufnr, silent = true, desc = "Go to above window" })
-    vim.keymap.set("t", "<M-l>", "<C-\\><C-N><C-w>l", { buffer = bufnr, silent = true, desc = "Go to right window" })
+    vim.keymap.set("t", "<leader>h", "<C-\\><C-N><C-w>h", { buffer = bufnr, silent = true, desc = "Go to left window" })
+    vim.keymap.set("t", "<leader>j", "<C-\\><C-N><C-w>j", { buffer = bufnr, silent = true, desc = "Go to below window" })
+    vim.keymap.set("t", "<leader>k", "<C-\\><C-N><C-w>k", { buffer = bufnr, silent = true, desc = "Go to above window" })
+    vim.keymap.set("t", "<leader>l", "<C-\\><C-N><C-w>l", { buffer = bufnr, silent = true, desc = "Go to right window" })
 
     -- Session cycling keymaps
     local function cycle_session(direction)

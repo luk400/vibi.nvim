@@ -643,6 +643,9 @@ function M.rename(old_name, new_name)
     if config.options.enable_agent_grid then
         local ok, grid = pcall(require, "vibe.grid")
         if ok and grid.state and grid.state.visible then
+            if grid.state.maximized_session == old_name then
+                grid.state.maximized_session = new_name
+            end
             for _, entry in ipairs(grid.state.window_ids or {}) do
                 if entry.name == old_name then
                     entry.name = new_name

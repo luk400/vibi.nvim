@@ -245,7 +245,7 @@ describe("E2E merge review", function()
             })
 
             e2e.open_review(sc, "test.lua", "both")
-            e2e.feed("<leader>k")
+            e2e.feed("<leader>K")
             vim.wait(100, function() return false end)
 
             e2e.assert_file_contents(sc.info.repo_root .. "/test.lua", {

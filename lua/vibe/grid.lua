@@ -10,6 +10,7 @@ M.state = {
     augroup = nil, ---@type integer|nil
     current_page = 1,
     total_pages = 1,
+    maximized_session = nil, ---@type string|nil session name when maximized
 }
 
 -- ---------------------------------------------------------------------------
@@ -264,6 +265,55 @@ local function show_split_grid(page_sessions, show_page_indicator)
     end
 end
 
+--- Create a single floating window filling the entire grid area for a maximized session.
+---@param sess table TerminalSession
+local function show_maximized_float(sess)
+    local opts = config.options
+    local window = require("vibe.window")
+    local cells = M.calculate_grid_cells(1)
+    local cell = cells[1]
+
+    local has_border = opts.border ~= "none"
+    local border_offset = has_border and 2 or 0
+
+    local title_name = string.format("%s [maximized]", sess.name)
+    local win_config = {
+        relative = "editor",
+        row = cell.row,
+        col = cell.col,
+        width = math.max(1, cell.width - border_offset),
+        height = math.max(1, cell.height - border_offset),
+        style = "minimal",
+        border = opts.border,
+        zindex = 50,
+    }
+
+    local winid = window.create_raw_float(sess.bufnr, win_config, title_name)
+    sess.winid = winid
+    M.state.window_ids = { { name = sess.name, winid = winid } }
+end
+
+--- Create a single split window filling the entire grid area for a maximized session.
+---@param sess table TerminalSession
+local function show_maximized_split(sess)
+    local opts = config.options
+    local window = require("vibe.window")
+    local grid_width = math.floor(vim.o.columns * opts.width)
+
+    local saved_ea = vim.o.equalalways
+    vim.o.equalalways = false
+
+    local title_name = string.format("%s [maximized]", sess.name)
+    local winid = window.create_raw_split(sess.bufnr, "right", 0, title_name)
+    vim.api.nvim_win_set_width(winid, grid_width)
+    vim.wo[winid].winfixwidth = true
+
+    vim.o.equalalways = saved_ea
+
+    sess.winid = winid
+    M.state.window_ids = { { name = sess.name, winid = winid } }
+end
+
 --- Show all sessions in a grid.
 ---@param page integer|nil 1-indexed page number (default: current_page)
 function M.show_all(page)
@@ -291,6 +341,42 @@ function M.show_all(page)
     require("vibe.status").close_status_window()
 
     local is_float = config.options.window_mode ~= "split"
+
+    -- Maximized mode: show only the maximized session at full grid size
+    if M.state.maximized_session then
+        local max_sess = terminal.sessions[M.state.maximized_session]
+        if max_sess then
+            if is_float then
+                show_maximized_float(max_sess)
+            else
+                show_maximized_split(max_sess)
+            end
+
+            M.state.visible = true
+            M.setup_grid_autocmds()
+            M.setup_grid_keymaps({ max_sess })
+
+            resize_all_ptys()
+            vim.defer_fn(function()
+                if M.state.visible then
+                    resize_all_ptys()
+                end
+            end, 100)
+
+            if #M.state.window_ids > 0 then
+                local entry = M.state.window_ids[1]
+                if vim.api.nvim_win_is_valid(entry.winid) then
+                    vim.api.nvim_set_current_win(entry.winid)
+                    terminal.current_session = entry.name
+                    vim.cmd("startinsert")
+                end
+            end
+            return
+        end
+        -- Maximized session was killed; clear and fall through to normal grid
+        M.state.maximized_session = nil
+    end
+
     local show_page_indicator = M.state.total_pages > 1
 
     if is_float then
@@ -331,6 +417,7 @@ end
 function M.hide_all()
     local was_visible = M.state.visible
     M.state.visible = false
+    M.state.maximized_session = nil
 
     -- Delete augroup first to prevent WinClosed from re-triggering
     if M.state.augroup then
@@ -370,21 +457,22 @@ function M.toggle()
     end
 end
 
---- Re-layout the grid (preserving current page).
+--- Re-layout the grid (preserving current page and maximize state).
 function M.refresh()
     if not M.state.visible then
         return
     end
-    -- Save current page, hide, re-show
     local page = M.state.current_page
+    local maximized = M.state.maximized_session
     M.hide_all()
     M.state.visible = false -- hide_all sets this, but be explicit
+    M.state.maximized_session = maximized -- restore after hide_all clears it
     M.show_all(page)
 end
 
 --- Go to next page.
 function M.next_page()
-    if M.state.total_pages <= 1 then
+    if M.state.maximized_session or M.state.total_pages <= 1 then
         return
     end
     local page = M.state.current_page + 1
@@ -397,7 +485,7 @@ end
 
 --- Go to previous page.
 function M.prev_page()
-    if M.state.total_pages <= 1 then
+    if M.state.maximized_session or M.state.total_pages <= 1 then
         return
     end
     local page = M.state.current_page - 1
@@ -450,6 +538,37 @@ function M.focus_or_navigate(name)
             M.focus(name)
             return
         end
+    end
+end
+
+--- Toggle maximize for the currently focused grid cell.
+function M.toggle_maximize()
+    if not M.state.visible then
+        return
+    end
+
+    if M.state.maximized_session then
+        -- Restore normal grid
+        M.state.maximized_session = nil
+        M.refresh()
+    else
+        -- Determine which session is focused
+        local current_win = vim.api.nvim_get_current_win()
+        local target_name = nil
+        for _, entry in ipairs(M.state.window_ids) do
+            if entry.winid == current_win then
+                target_name = entry.name
+                break
+            end
+        end
+        if not target_name then
+            target_name = terminal.current_session
+        end
+        if not target_name then
+            return
+        end
+        M.state.maximized_session = target_name
+        M.refresh()
     end
 end
 
@@ -561,23 +680,23 @@ function M.setup_grid_keymaps(page_sessions)
             desc = "Exit terminal mode",
         })
 
-        -- Terminal mode: Alt+hjkl for window navigation
-        vim.keymap.set("t", "<M-h>", "<C-\\><C-N><C-w>h", {
+        -- Terminal mode: <leader>hjkl for window navigation
+        vim.keymap.set("t", "<leader>h", "<C-\\><C-N><C-w>h", {
             buffer = bufnr,
             silent = true,
             desc = "Go to left window",
         })
-        vim.keymap.set("t", "<M-j>", "<C-\\><C-N><C-w>j", {
+        vim.keymap.set("t", "<leader>j", "<C-\\><C-N><C-w>j", {
             buffer = bufnr,
             silent = true,
             desc = "Go to below window",
         })
-        vim.keymap.set("t", "<M-k>", "<C-\\><C-N><C-w>k", {
+        vim.keymap.set("t", "<leader>k", "<C-\\><C-N><C-w>k", {
             buffer = bufnr,
             silent = true,
             desc = "Go to above window",
         })
-        vim.keymap.set("t", "<M-l>", "<C-\\><C-N><C-w>l", {
+        vim.keymap.set("t", "<leader>l", "<C-\\><C-N><C-w>l", {
             buffer = bufnr,
             silent = true,
             desc = "Go to right window",
@@ -610,6 +729,18 @@ function M.setup_grid_keymaps(page_sessions)
                     M.show_session_picker()
                 end
             end, { buffer = bufnr, silent = true, desc = "Open session picker" })
+        end
+
+        -- Maximize toggle keymaps (terminal + normal mode)
+        local maximize_keymap = config.options.agent_grid.maximize_keymap
+        if maximize_keymap then
+            vim.keymap.set("t", maximize_keymap, function()
+                vim.cmd("stopinsert")
+                M.toggle_maximize()
+            end, { buffer = bufnr, silent = true, desc = "Toggle maximize grid cell" })
+            vim.keymap.set("n", maximize_keymap, function()
+                M.toggle_maximize()
+            end, { buffer = bufnr, silent = true, desc = "Toggle maximize grid cell" })
         end
     end
 end
@@ -680,15 +811,30 @@ function M.show_session_picker()
     local status = require("vibe.status")
     local list = require("vibe.list")
 
+    -- When maximized, show all sessions (not just window_ids which has only one)
+    local source_sessions
+    if M.state.maximized_session then
+        source_sessions = {}
+        for name, sess in pairs(terminal.sessions) do
+            table.insert(source_sessions, { name = name, sess = sess })
+        end
+        table.sort(source_sessions, function(a, b) return a.name < b.name end)
+    else
+        source_sessions = {}
+        for _, entry in ipairs(M.state.window_ids) do
+            table.insert(source_sessions, { name = entry.name, sess = terminal.sessions[entry.name] })
+        end
+    end
+
     local items = {}
-    for _, entry in ipairs(M.state.window_ids) do
-        local sess = terminal.sessions[entry.name]
+    for _, src in ipairs(source_sessions) do
+        local sess = src.sess
         local is_alive = sess and sess.job_id and (pcall(vim.fn.jobpid, sess.job_id)) or false
-        local is_active = status.is_recently_active(entry.name)
-        local is_current = entry.name == terminal.current_session
+        local is_active = status.is_recently_active(src.name)
+        local is_current = src.name == terminal.current_session
         local cwd = sess and sess.cwd or ""
         table.insert(items, {
-            name = entry.name,
+            name = src.name,
             is_alive = is_alive,
             is_active = is_active,
             is_current = is_current,
@@ -710,7 +856,12 @@ function M.show_session_picker()
         end,
         on_select = function(item)
             close()
-            M.focus(item.name)
+            if M.state.maximized_session then
+                M.state.maximized_session = item.name
+                M.refresh()
+            else
+                M.focus(item.name)
+            end
         end,
     })
 

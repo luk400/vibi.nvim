@@ -30,7 +30,7 @@ function M.setup(bufnr, handlers)
             return
         end
         if item.classification == types.CONFLICT then
-            local k_keep = kd.get_key_or_fallback(bufnr, kd.DESC_KEEP_YOURS, "<leader>k")
+            local k_keep = kd.get_key_or_fallback(bufnr, kd.DESC_KEEP_YOURS, "<leader>K")
             local k_ai = kd.get_key_or_fallback(bufnr, kd.DESC_ACCEPT, "<leader>a")
             local k_edit = kd.get_key_or_fallback(bufnr, kd.DESC_EDIT, "<leader>e")
             vim.notify(
@@ -42,8 +42,8 @@ function M.setup(bufnr, handlers)
         end
     end, vim.tbl_extend("force", opts, { desc = kd.DESC_REJECT }))
 
-    -- '<leader>k' key: keep user version (conflicts only)
-    vim.keymap.set("n", "<leader>k", function()
+    -- '<leader>K' key: keep user version (conflicts only)
+    vim.keymap.set("n", "<leader>K", function()
         local item = handlers.get_item_at_cursor()
         if not item then
             return
@@ -122,7 +122,7 @@ function M.setup_preview(preview_bufnr, handlers, classification)
             vim.keymap.set("n", "<leader>r", handlers.reject, opts)
         end
     elseif classification == types.CONFLICT then
-        vim.keymap.set("n", "<leader>k", handlers.keep_user, opts)
+        vim.keymap.set("n", "<leader>K", handlers.keep_user, opts)
         vim.keymap.set("n", "<leader>a", handlers.keep_ai, opts)
         vim.keymap.set("n", "<leader>e", handlers.edit_manually, opts)
     else
