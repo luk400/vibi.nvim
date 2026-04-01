@@ -283,7 +283,71 @@ function M.update_snapshot(worktree_path)
     end
     persist.save_sessions(persisted)
 
+    -- If this is a merge session, auto-clean its source sessions
+    if info.source_worktrees and #info.source_worktrees > 0 then
+        M.finalize_merge_sources(worktree_path)
+    end
+
     return true
+end
+
+--- After a merge session's review is completed, sync and clean its source sessions.
+--- This prevents source worktrees from appearing dirty in :VibeReview.
+---@param worktree_path string The merge worktree that was just accepted
+---@return integer cleaned_count Number of source sessions cleaned
+function M.finalize_merge_sources(worktree_path)
+    local info = M.worktrees[worktree_path]
+    if not info or not info.source_worktrees or #info.source_worktrees == 0 then
+        return 0
+    end
+
+    -- Copy and clear source list FIRST to prevent any recursion
+    local source_paths = info.source_worktrees
+    info.source_worktrees = nil
+
+    -- Persist the cleared field immediately
+    local persisted_sessions = persist.load_sessions()
+    for _, s in ipairs(persisted_sessions) do
+        if s.worktree_path == worktree_path then
+            s.source_worktrees = nil
+            break
+        end
+    end
+    persist.save_sessions(persisted_sessions)
+
+    -- Ensure all worktrees are discovered
+    M.scan_for_vibe_worktrees()
+
+    local cleaned = 0
+    local cleaned_names = {}
+
+    for _, source_path in ipairs(source_paths) do
+        local source_info = M.worktrees[source_path]
+        if source_info then
+            -- Sync local state to source worktree (as if user ran :VibeSync)
+            M.sync_local_to_worktree(source_path)
+
+            -- Update snapshot to mark as clean
+            local ok = M.update_snapshot(source_path)
+            if ok then
+                cleaned = cleaned + 1
+                table.insert(cleaned_names, source_info.name)
+            end
+        end
+    end
+
+    if cleaned > 0 then
+        vim.notify(
+            string.format(
+                "[Vibe] Auto-cleaned %d source session(s): %s",
+                cleaned,
+                table.concat(cleaned_names, ", ")
+            ),
+            vim.log.levels.INFO
+        )
+    end
+
+    return cleaned
 end
 
 -- Legacy Compatibility

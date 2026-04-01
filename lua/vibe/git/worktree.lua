@@ -655,6 +655,7 @@ function M.scan_for_vibe_worktrees()
                         created_at = created_at,
                         addressed_hunks = persisted_info and persisted_info.addressed_hunks or {},
                         manually_modified_files = persisted_info and persisted_info.manually_modified_files or {},
+                        source_worktrees = persisted_info and persisted_info.source_worktrees or nil,
                     }
                 end
             end

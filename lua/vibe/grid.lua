@@ -11,6 +11,7 @@ M.state = {
     current_page = 1,
     total_pages = 1,
     maximized_session = nil, ---@type string|nil session name when maximized
+    saved_equalalways = nil, ---@type boolean|nil original equalalways value while grid is visible
 }
 
 -- ---------------------------------------------------------------------------
@@ -115,6 +116,25 @@ local function get_page_sessions(all_sessions, page, max)
 end
 
 -- ---------------------------------------------------------------------------
+-- Window helpers
+-- ---------------------------------------------------------------------------
+
+--- Find a non-floating, non-vibe editor window suitable as a split parent.
+---@return integer winid (0 = current window fallback)
+local function find_editor_window()
+    for _, w in ipairs(vim.api.nvim_list_wins()) do
+        local cfg = vim.api.nvim_win_get_config(w)
+        if cfg.relative == "" then -- non-floating
+            local buf = vim.api.nvim_win_get_buf(w)
+            if vim.bo[buf].filetype ~= "vibe" then
+                return w
+            end
+        end
+    end
+    return 0
+end
+
+-- ---------------------------------------------------------------------------
 -- Resize helpers
 -- ---------------------------------------------------------------------------
 
@@ -180,25 +200,33 @@ local function show_split_grid(page_sessions, show_page_indicator)
 
     local total_height = vim.o.lines - vim.o.cmdheight - 2
     local grid_width = math.floor(vim.o.columns * opts.width)
-    local row_height = math.floor(total_height / rows)
-    local col_width = math.floor(grid_width / cols)
+    -- Account for winbar (1 line per window row) and separators between rows
+    local height_overhead = rows + math.max(0, rows - 1)
+    local row_height = math.floor((total_height - height_overhead) / rows)
+    -- Account for separator columns between vertical splits
+    local width_overhead = math.max(0, cols - 1)
+    local col_width = math.floor((grid_width - width_overhead) / cols)
 
-    -- Temporarily disable equalalways to prevent Neovim from redistributing
-    -- space across ALL windows (including editor windows) during grid creation.
-    local saved_ea = vim.o.equalalways
+    -- Disable equalalways to prevent Neovim from redistributing space across
+    -- ALL windows (including editor windows).  It stays off for the lifetime
+    -- of the grid and is restored in hide_all().
+    if M.state.saved_equalalways == nil then
+        M.state.saved_equalalways = vim.o.equalalways
+    end
     vim.o.equalalways = false
 
     -- Build a rows x cols matrix of windows
     ---@type integer[][] grid_wins[row][col] = winid
     local grid_wins = {}
 
-    -- Step 1: Create the first window as a right split
+    -- Step 1: Create the first window as a right split of an editor window
+    local editor_win = find_editor_window()
     local first_sess = page_sessions[1]
     local first_title = first_sess.name
     if show_page_indicator then
         first_title = string.format("%s [%d/%d]", first_sess.name, M.state.current_page, M.state.total_pages)
     end
-    local first_win = window.create_raw_split(first_sess.bufnr, "right", 0, first_title)
+    local first_win = window.create_raw_split(first_sess.bufnr, "right", editor_win, first_title)
     vim.api.nvim_win_set_width(first_win, grid_width)
     grid_wins[1] = { first_win }
 
@@ -238,16 +266,15 @@ local function show_split_grid(page_sessions, show_page_indicator)
     for r = 1, #grid_wins do
         for c = 1, cols do
             if grid_wins[r] and grid_wins[r][c] and vim.api.nvim_win_is_valid(grid_wins[r][c]) then
-                -- Last column absorbs rounding remainder
-                local w = (c == cols) and (grid_width - col_width * (cols - 1)) or col_width
+                -- Last column absorbs rounding remainder (within usable width)
+                local usable_width = grid_width - width_overhead
+                local w = (c == cols) and (usable_width - col_width * (cols - 1)) or col_width
                 vim.api.nvim_win_set_width(grid_wins[r][c], w)
                 vim.wo[grid_wins[r][c]].winfixwidth = true
                 vim.wo[grid_wins[r][c]].winfixheight = true
             end
         end
     end
-
-    vim.o.equalalways = saved_ea
 
     -- Flatten to ordered list and record in state
     M.state.window_ids = {}
@@ -300,15 +327,16 @@ local function show_maximized_split(sess)
     local window = require("vibe.window")
     local grid_width = math.floor(vim.o.columns * opts.width)
 
-    local saved_ea = vim.o.equalalways
+    if M.state.saved_equalalways == nil then
+        M.state.saved_equalalways = vim.o.equalalways
+    end
     vim.o.equalalways = false
 
+    local editor_win = find_editor_window()
     local title_name = string.format("%s [maximized]", sess.name)
-    local winid = window.create_raw_split(sess.bufnr, "right", 0, title_name)
+    local winid = window.create_raw_split(sess.bufnr, "right", editor_win, title_name)
     vim.api.nvim_win_set_width(winid, grid_width)
     vim.wo[winid].winfixwidth = true
-
-    vim.o.equalalways = saved_ea
 
     sess.winid = winid
     M.state.window_ids = { { name = sess.name, winid = winid } }
@@ -330,6 +358,25 @@ function M.show_all(page)
     local page_sessions = get_page_sessions(all_sessions, M.state.current_page, max_sessions)
     if #page_sessions == 0 then
         return
+    end
+
+    -- Close any pre-existing non-grid session windows to prevent orphans.
+    -- This handles the case where sessions were opened in regular (non-grid)
+    -- windows before the grid was toggled on.
+    for _, sess in pairs(terminal.sessions) do
+        if sess.winid and vim.api.nvim_win_is_valid(sess.winid) then
+            local is_grid_win = false
+            for _, entry in ipairs(M.state.window_ids) do
+                if entry.winid == sess.winid then
+                    is_grid_win = true
+                    break
+                end
+            end
+            if not is_grid_win then
+                pcall(vim.api.nvim_win_close, sess.winid, true)
+                sess.winid = nil
+            end
+        end
     end
 
     -- Save buffers
@@ -436,6 +483,12 @@ function M.hide_all()
         end
     end
     M.state.window_ids = {}
+
+    -- Restore equalalways now that all grid windows are closed
+    if M.state.saved_equalalways ~= nil then
+        vim.o.equalalways = M.state.saved_equalalways
+        M.state.saved_equalalways = nil
+    end
 
     -- Reload buffers
     if was_visible and config.options.on_close ~= "none" then

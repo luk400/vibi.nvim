@@ -19,6 +19,7 @@ local M = {}
 ---@field has_terminal boolean Whether the terminal is currently active
 ---@field log_path string|nil Path to the most recent scrollback log file
 ---@field addressed_hunks AddressedHunk[]|nil Hunks that have been explicitly addressed
+---@field source_worktrees string[]|nil Worktree paths of sessions merged via conflict resolution
 
 --- Get the path to the sessions file
 ---@return string

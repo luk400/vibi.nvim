@@ -207,6 +207,7 @@ local function finalize_session(name, cwd, worktree_info)
                         last_active = os.time(),
                         has_terminal = false,
                         log_path = log_path,
+                        source_worktrees = worktree_info.source_worktrees,
                     })
                     -- Refresh grid if active
                     if config.options.enable_agent_grid then
@@ -479,6 +480,7 @@ function M.resume(persisted_session)
             created_at = persisted_session.created_at,
             addressed_hunks = persisted_session.addressed_hunks or {},
             manually_modified_files = persisted_session.manually_modified_files or {},
+            source_worktrees = persisted_session.source_worktrees or nil,
         }
     end
 
@@ -521,6 +523,7 @@ function M.resume(persisted_session)
                         last_active = os.time(),
                         has_terminal = false,
                         log_path = log_path,
+                        source_worktrees = persisted_session.source_worktrees,
                     })
                     -- Refresh grid if active
                     if config.options.enable_agent_grid then
@@ -616,6 +619,7 @@ function M.rename(old_name, new_name)
                 created_at = sess.created_at or wt.created_at,
                 last_active = os.time(),
                 has_terminal = true,
+                source_worktrees = wt.source_worktrees,
             })
         end
     end

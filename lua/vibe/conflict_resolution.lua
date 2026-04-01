@@ -2,6 +2,7 @@ local terminal = require("vibe.terminal")
 local git = require("vibe.git")
 local worktree_mod = require("vibe.git.worktree")
 local git_cmd_mod = require("vibe.git.cmd")
+local persist = require("vibe.persist")
 local util = require("vibe.util")
 
 local M = {}
@@ -276,6 +277,23 @@ function M.start_merge_session(all_worktrees, selected_map)
             return
         end
         terminal.show(name)
+
+        -- Record source worktrees for post-merge auto-cleanup
+        local source_paths = {}
+        for _, info in ipairs(selected_worktrees) do
+            table.insert(source_paths, info.worktree_path)
+        end
+        if git.worktrees[session.worktree_path] then
+            git.worktrees[session.worktree_path].source_worktrees = source_paths
+        end
+        local all_persisted = persist.load_sessions()
+        for _, s in ipairs(all_persisted) do
+            if s.worktree_path == session.worktree_path then
+                s.source_worktrees = source_paths
+                break
+            end
+        end
+        persist.save_sessions(all_persisted)
 
         -- Proactively dump scrollback for source worktrees that are still active
         for _, info in ipairs(selected_worktrees) do
