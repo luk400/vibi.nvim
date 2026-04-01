@@ -1,25 +1,7 @@
 local M = {}
 
----@class VibeDiffKeymaps
----@field accept_hunk string Accept current hunk (use disk version)
----@field reject_hunk string Reject current hunk (keep buffer version)
----@field accept_all string Accept all hunks in buffer
----@field reject_all string Reject all hunks in buffer
----@field prev_hunk string Jump to previous hunk
----@field next_hunk string Jump to next hunk
----@field toggle_preview Toggle diff preview window
-
 ---@class VibeDiffConfig
----@field enabled boolean Enable diff display
----@field poll_interval number Poll interval in ms (0 = disabled)
----@field on_focus boolean Check on FocusGained
----@field on_enter boolean Check on BufEnter
----@field on_cursor_hold boolean Check on CursorHold/CursorHoldI
----@field on_write boolean Check after writing (to clear diff)
----@field max_lines number Max lines per hunk to display
----@field keymaps VibeDiffKeymaps
----@field review_user_additions boolean (deprecated) Use merge_mode instead
----@field raw_mode boolean (deprecated) No longer used
+---@field mode "inline"|"split" Diff display mode
 
 ---@class VibeAgentGridConfig
 ---@field max_sessions integer Maximum sessions shown per grid page (default 9)
@@ -56,6 +38,7 @@ local M = {}
 ---@field merge_mode "none"|"user"|"ai"|"both" Auto-merge mode for review
 ---@field diff VibeDiffConfig Diff display configuration
 ---@field highlights VibeHighlightConfig Highlight color configuration
+---@field session_picker_keymap string|false Keybinding to open session picker in grid mode
 ---@field enable_agent_grid boolean Enable agent grid mode (show all sessions in a grid)
 ---@field agent_grid VibeAgentGridConfig Agent grid configuration
 ---@field worktree VibeWorktreeConfig Worktree configuration
@@ -74,53 +57,7 @@ M.defaults = {
     quit_protection = true,
     merge_mode = "user", -- "none", "user", "ai", "both"
     diff = {
-        enabled = true,
         mode = "inline", -- "inline" (default) or "split" (side-by-side)
-        poll_interval = 500, -- ms, 0 to disable
-        on_focus = true,
-        on_enter = true,
-        on_cursor_hold = true,
-        on_write = true,
-        max_lines = 100,
-        review_user_additions = true, -- If false, auto-accept user additions
-        raw_mode = false, -- Show raw git conflict markers instead of virtual lines
-        keymaps = {
-            accept_hunk = "<leader>da",
-            reject_hunk = "<leader>dr",
-            accept_all = "<leader>dA",
-            reject_all = "<leader>dR",
-            prev_hunk = "[d",
-            next_hunk = "]d",
-            toggle_preview = "<leader>dp",
-            keep_ours = "<leader>du",
-            keep_both = "<leader>db",
-            keep_none = "<leader>dn",
-        },
-        conflict_popup = {
-            enabled = true, -- Show popup for overlapping changes
-            width = 60,
-            max_height = 20,
-            keymaps = {
-                accept_user = "u", -- Keep user's version only
-                accept_ai = "a", -- Accept AI's version only
-                accept_both = "b", -- Keep both user + AI changes
-                accept_none = "n", -- Delete all changes in range
-                close = "q",
-            },
-        },
-        conflict_buffer = {
-            keymaps = {
-                keep_ours = "<leader>du",
-                keep_theirs = "<leader>da",
-                keep_both = "<leader>db",
-                keep_none = "<leader>dn",
-                accept_all = "<leader>dA",
-                reject_all = "<leader>dR",
-                next_conflict = "]c",
-                prev_conflict = "[c",
-                quit = "q",
-            },
-        },
     },
     history = {
         enabled = true, -- Record session history
@@ -149,6 +86,7 @@ M.defaults = {
         },
         overrides = {},
     },
+    session_picker_keymap = "<leader>s",
     enable_agent_grid = false,
     agent_grid = {
         max_sessions = 9,
@@ -251,12 +189,6 @@ local function validate_options(options)
         end
     end
 
-    if options.diff and options.diff.review_user_additions == false then
-        vim.notify(
-            "[Vibe] 'review_user_additions = false' is deprecated. Use merge_mode = 'user' or 'both' instead.",
-            vim.log.levels.WARN
-        )
-    end
 end
 
 ---@param opts VibeConfig|nil

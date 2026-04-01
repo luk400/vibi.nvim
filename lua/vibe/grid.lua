@@ -284,6 +284,16 @@ function M.show_all(page)
     -- Resize all PTYs to match their cell dimensions
     resize_all_ptys()
 
+    -- Deferred resize: the process spawned by termopen() may read the (wrong)
+    -- initial PTY size before the synchronous resize above takes effect.
+    -- A second resize after a short delay ensures the process picks up the
+    -- correct dimensions even if it missed the first SIGWINCH.
+    vim.defer_fn(function()
+        if M.state.visible then
+            resize_all_ptys()
+        end
+    end, 100)
+
     -- Focus first cell and enter insert mode
     if #M.state.window_ids > 0 then
         local first = M.state.window_ids[1]
@@ -384,6 +394,38 @@ function M.focus(name)
             vim.api.nvim_set_current_win(entry.winid)
             terminal.current_session = name
             vim.cmd("startinsert")
+            return
+        end
+    end
+end
+
+--- Focus a session, navigating to its page if necessary.
+--- Unlike `focus()`, this handles sessions that are on a different page than
+--- the one currently displayed.
+---@param name string
+function M.focus_or_navigate(name)
+    -- Fast path: session is on the current page.
+    for _, entry in ipairs(M.state.window_ids) do
+        if entry.name == name then
+            if vim.api.nvim_win_is_valid(entry.winid) then
+                vim.api.nvim_set_current_win(entry.winid)
+                terminal.current_session = name
+                vim.cmd("startinsert")
+            end
+            return
+        end
+    end
+
+    -- Session is not on the current page — find its page and navigate there.
+    local all_sessions = get_ordered_sessions()
+    local max_sessions = config.options.agent_grid.max_sessions
+    for i, sess in ipairs(all_sessions) do
+        if sess.name == name then
+            local target_page = math.ceil(i / max_sessions)
+            M.hide_all()
+            M.state.visible = false
+            M.show_all(target_page)
+            M.focus(name)
             return
         end
     end
@@ -536,6 +578,21 @@ function M.setup_grid_keymaps(page_sessions)
                 M.prev_page()
             end
         end, { buffer = bufnr, silent = true, desc = "Previous grid page" })
+
+        -- Session picker keymaps (terminal + normal mode)
+        local picker_keymap = config.options.session_picker_keymap
+        if picker_keymap then
+            vim.keymap.set("t", picker_keymap, function()
+                if M.state.visible then
+                    M.show_session_picker()
+                end
+            end, { buffer = bufnr, silent = true, desc = "Open session picker" })
+            vim.keymap.set("n", picker_keymap, function()
+                if M.state.visible then
+                    M.show_session_picker()
+                end
+            end, { buffer = bufnr, silent = true, desc = "Open session picker" })
+        end
     end
 end
 
@@ -588,6 +645,62 @@ function M.show_menu()
         close()
         require("vibe.session").show_list()
     end, { buffer = bufnr, silent = true })
+end
+
+-- ---------------------------------------------------------------------------
+-- Session Picker
+-- ---------------------------------------------------------------------------
+
+--- Show a floating session picker over the grid for quick session switching.
+function M.show_session_picker()
+    if not M.state.visible or #M.state.window_ids == 0 then
+        return
+    end
+
+    vim.cmd("stopinsert")
+
+    local status = require("vibe.status")
+    local list = require("vibe.list")
+
+    local items = {}
+    for _, entry in ipairs(M.state.window_ids) do
+        local sess = terminal.sessions[entry.name]
+        local is_alive = sess and sess.job_id and (pcall(vim.fn.jobpid, sess.job_id)) or false
+        local is_active = status.is_recently_active(entry.name)
+        local is_current = entry.name == terminal.current_session
+        local cwd = sess and sess.cwd or ""
+        table.insert(items, {
+            name = entry.name,
+            is_alive = is_alive,
+            is_active = is_active,
+            is_current = is_current,
+            cwd = cwd,
+        })
+    end
+
+    local close
+    local bufnr
+    bufnr, _, close = list.create({
+        title = "Session Picker",
+        items = items,
+        min_width = 50,
+        render = function(item, _idx, _is_selected)
+            local icon = item.is_active and "◉" or (item.is_alive and "○" or "✗")
+            local current_marker = item.is_current and " [current]" or ""
+            local short_cwd = vim.fn.pathshorten(item.cwd)
+            return string.format("  %s %s%s  %s", icon, item.name, current_marker, short_cwd)
+        end,
+        on_select = function(item)
+            close()
+            M.focus(item.name)
+        end,
+    })
+
+    for i, item in ipairs(items) do
+        if item.is_active then
+            vim.api.nvim_buf_add_highlight(bufnr, -1, "VibeActive", i - 1, 0, 5)
+        end
+    end
 end
 
 return M

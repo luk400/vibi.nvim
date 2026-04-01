@@ -349,6 +349,16 @@ function M.setup(opts)
         end, { silent = true, desc = "Toggle Vibe terminal" })
     end
 
+    -- Set up session picker keybinding
+    if config.options.session_picker_keymap then
+        vim.keymap.set("n", config.options.session_picker_keymap, function()
+            local grid = require("vibe.grid")
+            if config.options.enable_agent_grid and grid.state.visible then
+                grid.show_session_picker()
+            end
+        end, { silent = true, desc = "Open Vibe session picker" })
+    end
+
     -- which-key integration
     local wk_ok, wk = pcall(require, "which-key")
     if wk_ok then

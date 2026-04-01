@@ -94,9 +94,9 @@ function M.check_terminal_activity()
         if time_since_active >= timeout and not M.completion_triggered then
             -- AI is done! Check if there are changed files and show dialog
             M.completion_triggered = true
-            if auto_review.enabled ~= false and next(git.worktrees) ~= nil then
-                local files = git.get_changed_files()
-                if #files > 0 then
+            if auto_review.enabled ~= false then
+                local worktrees = git.get_worktrees_with_changes()
+                if #worktrees > 0 then
                     vim.defer_fn(function()
                         dialog.show()
                     end, 100)

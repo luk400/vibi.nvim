@@ -31,10 +31,11 @@ local function calculate_dimensions(position)
     return row, col, width, height
 end
 
---- Resize the PTY and send SIGWINCH to all descendant processes.
---- The job's process tree may include su/sudo which create new sessions —
---- the PTY's SIGWINCH only reaches the foreground process group and never
---- makes it to the actual TUI app.
+--- Resize the PTY and send SIGWINCH to all processes in the job tree.
+--- jobresize() delivers SIGWINCH via the PTY only to the foreground process
+--- group.  When su/sudo/setsid create new sessions the signal never reaches
+--- the actual TUI app, so we also walk the tree and signal every process
+--- explicitly (including the root — harmless if it already received it).
 ---@param bufnr integer
 ---@param winid integer
 local function resize_pty(bufnr, winid)
@@ -44,16 +45,21 @@ local function resize_pty(bufnr, winid)
     if job then
         vim.fn.jobresize(job, actual_w, actual_h)
 
-        local queue = { vim.fn.jobpid(job) }
+        local root = vim.fn.jobpid(job)
+        local queue = { root }
         while #queue > 0 do
-            local ppid = table.remove(queue, 1)
-            local children =
-                vim.fn.systemlist(string.format("ps --ppid %d -o pid= 2>/dev/null", ppid))
+            local pid = table.remove(queue, 1)
+            pcall(vim.uv.kill, pid, 28)
+            -- pgrep -P is portable (Linux + macOS); fall back to ps --ppid
+            local children = vim.fn.systemlist(string.format("pgrep -P %d 2>/dev/null", pid))
+            if #children == 0 then
+                children =
+                    vim.fn.systemlist(string.format("ps --ppid %d -o pid= 2>/dev/null", pid))
+            end
             for _, c in ipairs(children) do
                 local cpid = tonumber(vim.trim(c))
                 if cpid then
                     table.insert(queue, cpid)
-                    pcall(vim.uv.kill, cpid, 28)
                 end
             end
         end
@@ -100,6 +106,8 @@ function M.create_raw_split(bufnr, split_dir, parent_win, session_name)
         vim.wo[winid].winbar = " Vibe: " .. session_name .. " "
     end
     vim.wo[winid].winhl = "Normal:Normal"
+    vim.wo[winid].number = false
+    vim.wo[winid].relativenumber = false
     return winid
 end
 
@@ -141,6 +149,8 @@ local function create_split_window(bufnr, session_name)
     end
 
     vim.wo[winid].winhl = "Normal:Normal"
+    vim.wo[winid].number = false
+    vim.wo[winid].relativenumber = false
 
     return winid
 end
@@ -187,6 +197,10 @@ function M.create(bufnr, session_name)
     else
         current_winid = create_split_window(bufnr, session_name)
     end
+
+    -- Initial PTY resize — termopen() inherited dimensions from the previously
+    -- active window, which is typically wider/taller than the split or float.
+    resize_pty(bufnr, current_winid)
 
     -- Buffer-level keymaps (persist across window recreations)
     local close_fn = function()

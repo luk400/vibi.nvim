@@ -29,6 +29,9 @@ This means the AI edits a "shadow" copy of your codebase. Your actual files rema
 *   **Lualine Statusline:** `require("vibe").statusline` shows active/total session counts.
 *   **Context-Sensitive Help:** `:VibeHelp` shows relevant keymaps for the current buffer context.
 *   **Agent Grid:** Display all sessions simultaneously in a grid layout with `enable_agent_grid = true`.
+*   **Session Picker:** Quick-jump to any grid session via `<leader>s` floating picker.
+*   **Grid-Aware Conflict Resolution:** `:VibeConflictResolution` integrates merge sessions into the agent grid when enabled.
+*   **Clean Agent Windows:** Split-mode agent windows hide line numbers automatically.
 *   **which-key Integration:** Automatically registers `<leader>d` (Vibe Diff) and `<leader>v` (Vibe Terminal) groups.
 
 ## Prerequisites
@@ -169,6 +172,9 @@ require("vibe").setup({
     -- Keys are Neovim highlight group names, values are nvim_set_hl opts
     overrides = {},
   },
+
+  -- Session Picker (quick-jump to sessions in agent grid)
+  session_picker_keymap = "<leader>s", -- Set to false to disable
 
   -- Agent Grid (show all sessions simultaneously in a grid)
   enable_agent_grid = false, -- Set to true to enable grid mode
@@ -342,9 +348,11 @@ require("vibe").setup({
 | Terminal | `<M-h/j/k/l>` | Navigate between grid cells |
 | Terminal | `<C-n>` | Next grid page (when paginated) |
 | Terminal | `<C-p>` | Previous grid page (when paginated) |
+| Terminal | `<leader>s` | Open session picker (quick-jump) |
 | Terminal | `<Esc><Esc>` | Exit terminal mode |
 | Normal | `q` / `<Esc>` | Hide entire grid |
 | Normal | `<leader>v` | Toggle grid |
+| Normal | `<leader>s` | Open session picker (quick-jump) |
 
 When the grid is hidden, all sessions continue running in the background. Show the grid again with `<leader>v` or `:VibeGrid`.
 

@@ -42,9 +42,8 @@ describe("config validation", function()
     end)
 
     it("deep-merges diff sub-tables", function()
-        config.setup({ diff = { poll_interval = 1000 } })
-        assert.equals(1000, config.options.diff.poll_interval)
-        assert.equals(true, config.options.diff.enabled) -- default preserved
+        config.setup({ diff = { mode = "split" } })
+        assert.equals("split", config.options.diff.mode)
     end)
 
     it("deep-merges highlights.theme sub-tables", function()

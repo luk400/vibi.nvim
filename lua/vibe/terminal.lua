@@ -242,7 +242,7 @@ function M.show(name, cwd)
         save_buffers()
         if grid and grid.state.visible then
             grid.refresh()
-            grid.focus(name)
+            grid.focus_or_navigate(name)
         else
             local window = require("vibe.window")
             existing.winid = window.create(existing.bufnr, name)
@@ -260,7 +260,7 @@ function M.show(name, cwd)
         save_buffers()
         if grid and grid.state.visible then
             grid.refresh()
-            grid.focus(name)
+            grid.focus_or_navigate(name)
         else
             local window = require("vibe.window")
             session.winid = window.create(session.bufnr, name)

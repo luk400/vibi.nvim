@@ -275,8 +275,7 @@ function M.start_merge_session(all_worktrees, selected_map)
         if not session then
             return
         end
-        session.winid = require("vibe.window").create(session.bufnr, name)
-        vim.cmd("startinsert")
+        terminal.show(name)
 
         -- Proactively dump scrollback for source worktrees that are still active
         for _, info in ipairs(selected_worktrees) do

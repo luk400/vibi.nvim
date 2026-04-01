@@ -30,10 +30,7 @@ require("vibe.config").setup({
     quit_protection = false,
     on_open = "none",
     on_close = "none",
-    diff = {
-        enabled = true,
-        poll_interval = 0, -- Disable async polling for tests
-    },
+    diff = {},
 })
 
 -- Ensure test cache directory exists
