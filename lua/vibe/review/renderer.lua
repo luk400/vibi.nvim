@@ -23,44 +23,7 @@ M.preview_bufnr = nil
 M.hint_winnr = nil
 M.hint_bufnr = nil
 
---- Highlight group setup
-function M.setup_highlights()
-    -- Suggestions (blue)
-    vim.api.nvim_set_hl(0, "VibeRegionSuggestion", { fg = "#74C0FC", bold = true, default = true })
-    vim.api.nvim_set_hl(0, "VibeRegionSuggestionBg", { bg = "#1a2a3a", default = true })
-
-    -- Convergent (green)
-    vim.api.nvim_set_hl(0, "VibeRegionConvergent", { fg = "#69DB7C", bold = true, default = true })
-    vim.api.nvim_set_hl(0, "VibeRegionConvergentBg", { bg = "#1a3a1a", default = true })
-
-    -- Conflict (red)
-    vim.api.nvim_set_hl(0, "VibeRegionConflictBg", { bg = "#3a1a1a", default = true })
-
-    -- Auto-merged (subtle)
-    vim.api.nvim_set_hl(0, "VibeRegionAutoMerged", { bg = "#1a2a1a", default = true })
-
-    -- Auto-merged visual indicators
-    vim.api.nvim_set_hl(0, "VibeAutoMergedAdd", { bg = "#1a3a1a", default = true })
-    vim.api.nvim_set_hl(0, "VibeAutoMergedDelete", { bg = "#3a1a1a", fg = "#FF6B6B", default = true })
-    vim.api.nvim_set_hl(0, "VibeAutoMergedChange", { bg = "#3a3a1a", default = true })
-    vim.api.nvim_set_hl(0, "VibeDeleteSentinel", { bg = "#3a1a1a", fg = "#FF6B6B", default = true })
-
-    -- Preview sections
-    vim.api.nvim_set_hl(0, "VibePreviewUser", { fg = "#74C0FC", bold = true, default = true })
-    vim.api.nvim_set_hl(0, "VibePreviewAI", { fg = "#69DB7C", bold = true, default = true })
-    vim.api.nvim_set_hl(0, "VibePreviewBase", { fg = "#868E96", default = true })
-    vim.api.nvim_set_hl(0, "VibePreviewKeymap", { fg = "#74C0FC", bold = true, default = true })
-
-    -- Inline display highlights (background-only for code readability)
-    vim.api.nvim_set_hl(0, "VibeConflictInline", { bg = "#3a1a1a", default = true })
-    vim.api.nvim_set_hl(0, "VibeSuggestionInline", { bg = "#1a2a3a", default = true })
-    vim.api.nvim_set_hl(0, "VibeConvergentInline", { bg = "#1a3a1a", default = true })
-
-    -- Sign definitions
-    vim.fn.sign_define("VibeReviewConflict", { text = "!", texthl = "ErrorMsg" })
-    vim.fn.sign_define("VibeReviewSuggestion", { text = "~", texthl = "WarningMsg" })
-    vim.fn.sign_define("VibeReviewConvergent", { text = "=", texthl = "String" })
-end
+-- Highlights are now centralized in vibe.highlights
 
 --- Find the main (non-floating) window showing a buffer
 ---@param bufnr integer
@@ -183,7 +146,6 @@ function M.show_file(worktree_path, filepath, hunks, merge_mode)
         vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, resolved_lines)
     end
 
-    M.setup_highlights()
     M.setup_keymaps(bufnr)
     M.highlight_auto_merged(bufnr)
     M.setup_inline_review_items(bufnr)
@@ -1470,7 +1432,7 @@ function M.setup_keymaps(bufnr)
 end
 
 function M.setup()
-    M.setup_highlights()
+    -- Highlights are now handled by vibe.highlights.setup()
 end
 
 --- Show floating hint window for accept-file keybind

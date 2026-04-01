@@ -39,8 +39,8 @@ end
 function M.setup(opts)
     config.setup(opts)
 
-    -- Set up highlights
-    status.setup_highlights()
+    -- Set up highlights (centralized)
+    require("vibe.highlights").setup()
 
     -- Set up diff display
     diff.setup()

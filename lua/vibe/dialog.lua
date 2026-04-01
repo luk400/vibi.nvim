@@ -518,11 +518,6 @@ function M.get_current_worktree()
     return M.current_worktree_path
 end
 
-function M.setup_highlights()
-    vim.api.nvim_set_hl(0, "VibeDialogHeader", { link = "Title" })
-    vim.api.nvim_set_hl(0, "VibeDialogFile", { link = "Normal" })
-    vim.api.nvim_set_hl(0, "VibeDialogSelected", { link = "Visual" })
-    vim.api.nvim_set_hl(0, "VibeDialogFooter", { link = "Comment" })
-end
+-- Highlights are now centralized in vibe.highlights
 
 return M

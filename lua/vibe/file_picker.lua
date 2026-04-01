@@ -16,16 +16,7 @@ M.repo_root = nil
 M.worktree_path = nil
 M.git_status_map = {}
 
-function M.setup_highlights()
-    vim.api.nvim_set_hl(0, "VibePickerUntracked", { default = true, fg = "#a6e3a1", bold = true })
-    vim.api.nvim_set_hl(0, "VibePickerModified", { default = true, fg = "#f9e2af" })
-    vim.api.nvim_set_hl(0, "VibePickerIgnored", { default = true, fg = "#6c7086", italic = true })
-    vim.api.nvim_set_hl(0, "VibePickerNormal", { default = true, link = "Normal" })
-    vim.api.nvim_set_hl(0, "VibePickerSelected", { default = true, fg = "#a6e3a1", bold = true })
-    vim.api.nvim_set_hl(0, "VibePickerDir", { default = true, fg = "#89b4fa", bold = true })
-    vim.api.nvim_set_hl(0, "VibePickerHeader", { default = true, link = "Title" })
-    vim.api.nvim_set_hl(0, "VibePickerFooter", { default = true, link = "Comment" })
-end
+-- Highlights are now centralized in vibe.highlights
 
 --- Build git status map for the repo
 ---@param repo_root string
@@ -537,7 +528,6 @@ end
 ---@param repo_root string
 function M.show(worktree_path, repo_root)
     M.close()
-    M.setup_highlights()
 
     M.repo_root = repo_root
     M.worktree_path = worktree_path

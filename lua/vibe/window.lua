@@ -259,6 +259,21 @@ function M.create(bufnr, session_name)
         end,
     })
 
+    vim.api.nvim_create_autocmd("WinResized", {
+        group = resize_group,
+        callback = function()
+            if not vim.api.nvim_win_is_valid(current_winid) then
+                return
+            end
+            for _, w in ipairs(vim.v.event.windows) do
+                if w == current_winid then
+                    resize_pty(bufnr, current_winid)
+                    return
+                end
+            end
+        end,
+    })
+
     setup_win_close(current_winid)
 
     return current_winid

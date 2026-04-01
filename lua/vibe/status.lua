@@ -277,9 +277,6 @@ function M.hide()
     end
 end
 
---- Setup highlight groups
-function M.setup_highlights()
-    vim.api.nvim_set_hl(0, "VibeActive", { link = "WarningMsg" })
-end
+-- Highlights are now centralized in vibe.highlights
 
 return M

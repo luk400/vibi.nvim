@@ -88,12 +88,7 @@ function M.clear(bufnr)
 end
 
 function M.setup()
-    vim.fn.sign_define("VibeDiffHunk", { text = "│", texthl = "WarningMsg" })
-    vim.fn.sign_define("VibeDiffConflict", { text = "!", texthl = "ErrorMsg" })
-    vim.api.nvim_set_hl(0, "VibeUserAddition", { link = "DiagnosticInfo", default = true })
-    vim.api.nvim_set_hl(0, "VibeConflictCollapsed", { link = "DiagnosticError", default = true })
-
-    dialog.setup_highlights()
+    -- Highlights and signs are now handled by vibe.highlights
     require("vibe.review.renderer").setup()
 end
 

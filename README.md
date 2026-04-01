@@ -62,6 +62,7 @@ require("vibe").setup({
 
   -- Window sizing and positioning
   position = "right", -- "right", "left", "centered", "top", "bottom"
+  window_mode = "float", -- "float" (floating window) or "split" (vim split)
   width = 0.5,
   height = 0.8,
   border = "rounded",
@@ -149,6 +150,25 @@ require("vibe").setup({
     timeout = 2000,      -- Inactivity timeout in ms before showing review
   },
 
+  -- Highlight colors (all optional, shown are the defaults)
+  highlights = {
+    -- Semantic theme colors that drive all highlight groups
+    theme = {
+      suggestion_fg = "#FCC474", -- Yellow: suggestion/user region foreground
+      suggestion_bg = "#3a2a1a", -- Dark yellow tint: suggestion region background
+      convergent_fg = "#69DB7C", -- Green: convergent region foreground
+      convergent_bg = "#1a3a1a", -- Dark green tint: convergent/auto-merged background
+      conflict_bg   = "#3a1a1a", -- Dark red tint: conflict region background
+      delete_fg     = "#FF6B6B", -- Red: deleted content foreground
+      base_fg       = "#868E96", -- Grey: base/previous content foreground
+      ai_fg         = "#69DB7C", -- Green: AI content in preview foreground
+      change_bg     = "#3a3a1a", -- Dark yellow-green: modification background
+    },
+    -- Per-highlight-group overrides (escape hatch for full control)
+    -- Keys are Neovim highlight group names, values are nvim_set_hl opts
+    overrides = {},
+  },
+
   worktree = {
     -- Untracked files: false = none, true = all, or list of glob patterns
     copy_untracked = false,
@@ -159,6 +179,72 @@ require("vibe").setup({
   },
 })
 ```
+
+## Highlight Customization
+
+All highlight colors are configurable via the `highlights` option. There are two levels:
+
+**Theme colors** — a small set of semantic colors that drive all related highlight groups. Change one value and all derived groups update automatically:
+
+```lua
+require("vibe").setup({
+  highlights = {
+    theme = {
+      suggestion_fg = "#c084fc", -- Purple suggestions instead of yellow
+      conflict_bg   = "#4a1a1a", -- Brighter red conflict background
+    },
+  },
+})
+```
+
+**Per-group overrides** — for full control over any individual highlight group:
+
+```lua
+require("vibe").setup({
+  highlights = {
+    overrides = {
+      VibeRegionSuggestion = { fg = "#ff0000", bold = false, italic = true },
+      VibePickerDir = { fg = "#e0af68", bold = true },
+    },
+  },
+})
+```
+
+<details>
+<summary>All highlight groups that can be overridden</summary>
+
+| Group | Default | Description |
+|-------|---------|-------------|
+| `VibeRegionSuggestion` | `suggestion_fg`, bold | Suggestion region label |
+| `VibeRegionSuggestionBg` | `suggestion_bg` | Suggestion region background |
+| `VibeRegionConvergent` | `convergent_fg`, bold | Convergent region label |
+| `VibeRegionConvergentBg` | `convergent_bg` | Convergent region background |
+| `VibeRegionConflictBg` | `conflict_bg` | Conflict region background |
+| `VibeRegionAutoMerged` | `convergent_bg` | Auto-merged region background |
+| `VibeAutoMergedAdd` | `convergent_bg` | Auto-merged addition |
+| `VibeAutoMergedDelete` | `conflict_bg` + `delete_fg` | Auto-merged deletion |
+| `VibeAutoMergedChange` | `change_bg` | Auto-merged modification |
+| `VibeDeleteSentinel` | `conflict_bg` + `delete_fg` | Delete sentinel marker |
+| `VibePreviewUser` | `suggestion_fg`, bold | Preview: user section |
+| `VibePreviewAI` | `ai_fg`, bold | Preview: AI section |
+| `VibePreviewBase` | `base_fg` | Preview: base section |
+| `VibePreviewKeymap` | `suggestion_fg`, bold | Preview: keymap help |
+| `VibeConflictInline` | `conflict_bg` | Inline conflict background |
+| `VibeSuggestionInline` | `suggestion_bg` | Inline suggestion background |
+| `VibeConvergentInline` | `convergent_bg` | Inline convergent background |
+| `VibeUserAddition` | link `DiagnosticInfo` | User addition sign |
+| `VibeConflictCollapsed` | link `DiagnosticError` | Collapsed conflict sign |
+| `VibeDialogHeader` | link `Title` | Dialog header |
+| `VibeDialogFile` | link `Normal` | Dialog file entry |
+| `VibeDialogSelected` | link `Visual` | Dialog selected item |
+| `VibeDialogFooter` | link `Comment` | Dialog footer |
+| `VibePickerUntracked` | `#a6e3a1`, bold | File picker: untracked |
+| `VibePickerModified` | `#f9e2af` | File picker: modified |
+| `VibePickerIgnored` | `#6c7086`, italic | File picker: ignored |
+| `VibePickerDir` | `#89b4fa`, bold | File picker: directory |
+| `VibeActive` | link `WarningMsg` | Status: active session |
+
+</details>
 
 ## Commands
 
@@ -244,6 +330,40 @@ You can also query `require("vibe").is_open()` for simple open/closed state.
     *   When you `reject`, it ignores it.
     *   Once a file is fully resolved, the worktree version is synced to match your local version to keep the AI context up to date.
 5.  **Cleanup:** When you delete a session, the worktree and temporary branch are removed.
+
+## Review Concepts
+
+When you review AI changes, Vibe performs a three-way comparison between the **base** (snapshot of the file when the session started), **yours** (your current file), and the **AI's** version (the worktree copy the AI edited). Each changed region is classified into one of three categories:
+
+### Suggestion
+
+A suggestion is a change made by only one side — either you or the AI — with no overlapping edit from the other. There are two kinds:
+
+*   **AI suggestion** (`AI_ONLY`): The AI modified a region that you left untouched. Displayed with a yellow background. You can accept the AI's change or reject it to keep the original.
+*   **Your change** (`USER_ONLY`): You modified a region that the AI left untouched. Also displayed with a yellow background. When `review_user_additions` is enabled, your own additions are shown for review too, so you can confirm or discard them.
+
+Suggestions are the simplest category — there is no ambiguity about what changed or who changed it.
+
+### Convergent
+
+A convergent region is one where both you and the AI independently made **the same change** to the same lines. Since both sides agree, there is nothing to resolve — the change is auto-merged. Convergent regions are displayed with a green background and labeled "Both agree".
+
+### Conflict
+
+A conflict occurs when both you and the AI changed the **same region differently**. The system cannot pick a winner automatically, so you must resolve it manually. Conflicts are displayed with a red background and open a preview popup showing both versions. There are three sub-types:
+
+*   **mod vs mod**: Both sides modified the same lines in different ways.
+*   **mod vs del**: One side modified lines that the other side deleted.
+*   **del vs mod**: The inverse — one side deleted lines the other modified.
+
+Resolution options for conflicts:
+
+| Key | Action |
+|-----|--------|
+| `u` | Keep your version |
+| `a` | Keep AI's version |
+| `b` | Keep both (concatenated) |
+| `n` | Delete the entire region |
 
 ## License
 

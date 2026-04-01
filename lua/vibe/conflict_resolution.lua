@@ -189,7 +189,7 @@ function M.build_merge_prompt(contexts, has_logs)
         table.insert(lines, "3. Merge each branch one at a time using: git merge <branch-name>")
         table.insert(
             lines,
-            "4. If a merge conflict occurs, resolve it by examining both sides and choosing the correct resolution. If the correct resolution is not obvious from the context (the worktree conversations), e.g. if a change/implementation from one worktree would interfere with that of another, then stop, explain the situation thoroughly to the user and as the user for a decision on what to do."
+            "4. If a merge conflict occurs, resolve it by examining both sides and choosing the correct resolution. If the correct resolution is not obvious from the context (the worktree conversations), e.g. if a change/implementation from one worktree would interfere with that of another, then stop, explain the situation thoroughly to the user and ask the user for a decision on what to do."
         )
         table.insert(lines, "5. After all merges, verify the result makes sense")
         table.insert(lines, "6. Only merge the branches listed above - do not merge any other branches")

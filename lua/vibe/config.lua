@@ -24,6 +24,21 @@ local M = {}
 ---@class VibeWorktreeConfig
 ---@field worktree_dir string|nil Custom directory for worktrees (defaults to stdpath("cache") .. "/vibe-worktrees")
 
+---@class VibeThemeColors
+---@field suggestion_fg string Foreground for suggestion/user regions (default: "#FCC474" yellow)
+---@field suggestion_bg string Background for suggestion regions (default: "#3a2a1a")
+---@field convergent_fg string Foreground for convergent regions (default: "#69DB7C" green)
+---@field convergent_bg string Background for convergent/auto-merged regions (default: "#1a3a1a")
+---@field conflict_bg string Background for conflict regions (default: "#3a1a1a")
+---@field delete_fg string Foreground for deleted content (default: "#FF6B6B" red)
+---@field base_fg string Foreground for base/previous content (default: "#868E96" grey)
+---@field ai_fg string Foreground for AI content in preview (default: "#69DB7C" green)
+---@field change_bg string Background for modification indicators (default: "#3a3a1a")
+
+---@class VibeHighlightConfig
+---@field theme VibeThemeColors Semantic colors that drive all highlight groups
+---@field overrides table<string, vim.api.keyset.highlight> Per-highlight-group overrides
+
 ---@class VibeConfig
 ---@field command string Command to run in the terminal
 ---@field position string Window position: "right", "left", "centered", "top", "bottom"
@@ -37,6 +52,7 @@ local M = {}
 ---@field quit_protection boolean Show dialog on quit when sessions exist (disable for testing)
 ---@field merge_mode "none"|"user"|"ai"|"both" Auto-merge mode for review
 ---@field diff VibeDiffConfig Diff display configuration
+---@field highlights VibeHighlightConfig Highlight color configuration
 ---@field worktree VibeWorktreeConfig Worktree configuration
 
 ---@type VibeConfig
@@ -114,6 +130,20 @@ M.defaults = {
         enabled = true, -- Show review dialog automatically when AI finishes
         timeout = 2000, -- Time in ms to wait before showing review
     },
+    highlights = {
+        theme = {
+            suggestion_fg = "#FCC474", -- Yellow (foreground for suggestion/user regions)
+            suggestion_bg = "#3a2a1a", -- Dark yellow tint (background for suggestion regions)
+            convergent_fg = "#69DB7C", -- Green (foreground for convergent regions)
+            convergent_bg = "#1a3a1a", -- Dark green tint (background for convergent/auto-merged)
+            conflict_bg   = "#3a1a1a", -- Dark red tint (background for conflict regions)
+            delete_fg     = "#FF6B6B", -- Red (foreground for deleted content)
+            base_fg       = "#868E96", -- Grey (foreground for base/previous content)
+            ai_fg         = "#69DB7C", -- Green (foreground for AI content in preview)
+            change_bg     = "#3a3a1a", -- Dark yellow-green (background for modifications)
+        },
+        overrides = {},
+    },
     worktree = {
         -- Custom directory for worktrees (defaults to stdpath("cache") .. "/vibe-worktrees")
         worktree_dir = nil,
@@ -168,6 +198,40 @@ local function validate_options(options)
             vim.log.levels.WARN
         )
         options.merge_mode = "user"
+    end
+
+    if options.highlights and options.highlights.theme then
+        local valid_theme_keys = {
+            suggestion_fg = true, suggestion_bg = true,
+            convergent_fg = true, convergent_bg = true,
+            conflict_bg = true, delete_fg = true,
+            base_fg = true, ai_fg = true, change_bg = true,
+        }
+        for key, val in pairs(options.highlights.theme) do
+            if not valid_theme_keys[key] then
+                vim.notify(
+                    string.format("[Vibe] Unknown highlight theme key '%s', ignoring", key),
+                    vim.log.levels.WARN
+                )
+                options.highlights.theme[key] = nil
+            elseif type(val) ~= "string" or not val:match("^#%x%x%x%x%x%x$") then
+                vim.notify(
+                    string.format(
+                        "[Vibe] Invalid color '%s' for highlights.theme.%s (expected #RRGGBB), using default",
+                        tostring(val), key
+                    ),
+                    vim.log.levels.WARN
+                )
+                options.highlights.theme[key] = M.defaults.highlights.theme[key]
+            end
+        end
+    end
+
+    if options.highlights and options.highlights.overrides then
+        if type(options.highlights.overrides) ~= "table" then
+            vim.notify("[Vibe] highlights.overrides must be a table, ignoring", vim.log.levels.WARN)
+            options.highlights.overrides = {}
+        end
     end
 
     if options.diff and options.diff.review_user_additions == false then

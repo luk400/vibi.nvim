@@ -46,4 +46,30 @@ describe("config validation", function()
         assert.equals(1000, config.options.diff.poll_interval)
         assert.equals(true, config.options.diff.enabled) -- default preserved
     end)
+
+    it("deep-merges highlights.theme sub-tables", function()
+        config.setup({ highlights = { theme = { suggestion_fg = "#ff0000" } } })
+        assert.equals("#ff0000", config.options.highlights.theme.suggestion_fg)
+        assert.equals("#69DB7C", config.options.highlights.theme.convergent_fg) -- default preserved
+    end)
+
+    it("validates hex color format in theme", function()
+        config.setup({ highlights = { theme = { suggestion_fg = "red" } } })
+        assert.equals("#FCC474", config.options.highlights.theme.suggestion_fg) -- falls back to default
+    end)
+
+    it("warns on unknown theme key", function()
+        config.setup({ highlights = { theme = { foobar = "#123456" } } })
+        assert.is_nil(config.options.highlights.theme.foobar)
+    end)
+
+    it("accepts valid overrides table", function()
+        config.setup({ highlights = { overrides = { VibeRegionSuggestion = { fg = "#abcdef" } } } })
+        assert.is_not_nil(config.options.highlights.overrides.VibeRegionSuggestion)
+    end)
+
+    it("default suggestion_fg is yellow", function()
+        config.setup({})
+        assert.equals("#FCC474", config.options.highlights.theme.suggestion_fg)
+    end)
 end)
