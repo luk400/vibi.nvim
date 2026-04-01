@@ -60,6 +60,49 @@ local function resize_pty(bufnr, winid)
     end
 end
 
+--- Resize the PTY for a given buffer/window pair (public wrapper for grid module).
+---@param bufnr integer
+---@param winid integer
+function M.resize_pty(bufnr, winid)
+    resize_pty(bufnr, winid)
+end
+
+--- Create a raw floating window (no keymaps, no autocmds).
+--- Used by grid module which manages its own lifecycle.
+---@param bufnr integer
+---@param win_config table nvim_open_win config
+---@param session_name string|nil
+---@return integer winid
+function M.create_raw_float(bufnr, win_config, session_name)
+    if session_name then
+        win_config.title = " Vibe: " .. session_name .. " "
+        win_config.title_pos = "center"
+    end
+    local winid = vim.api.nvim_open_win(bufnr, false, win_config)
+    vim.wo[winid].winblend = 0
+    vim.wo[winid].winhl = "Normal:Normal,FloatBorder:FloatBorder"
+    return winid
+end
+
+--- Create a raw split window (no keymaps, no autocmds).
+--- Used by grid module which manages its own lifecycle.
+---@param bufnr integer
+---@param split_dir string
+---@param parent_win integer
+---@param session_name string|nil
+---@return integer winid
+function M.create_raw_split(bufnr, split_dir, parent_win, session_name)
+    local winid = vim.api.nvim_open_win(bufnr, false, {
+        split = split_dir,
+        win = parent_win,
+    })
+    if session_name then
+        vim.wo[winid].winbar = " Vibe: " .. session_name .. " "
+    end
+    vim.wo[winid].winhl = "Normal:Normal"
+    return winid
+end
+
 --- Create a split window for the terminal buffer.
 ---@param bufnr integer
 ---@param session_name string|nil

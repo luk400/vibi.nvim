@@ -28,6 +28,7 @@ This means the AI edits a "shadow" copy of your codebase. Your actual files rema
 *   **Safety:** Quit protection warns you if you try to exit Neovim while there are unreviewed AI changes.
 *   **Lualine Statusline:** `require("vibe").statusline` shows active/total session counts.
 *   **Context-Sensitive Help:** `:VibeHelp` shows relevant keymaps for the current buffer context.
+*   **Agent Grid:** Display all sessions simultaneously in a grid layout with `enable_agent_grid = true`.
 *   **which-key Integration:** Automatically registers `<leader>d` (Vibe Diff) and `<leader>v` (Vibe Terminal) groups.
 
 ## Prerequisites
@@ -169,6 +170,12 @@ require("vibe").setup({
     overrides = {},
   },
 
+  -- Agent Grid (show all sessions simultaneously in a grid)
+  enable_agent_grid = false, -- Set to true to enable grid mode
+  agent_grid = {
+    max_sessions = 9,        -- Max sessions per grid page (paginated beyond this)
+  },
+
   worktree = {
     -- Untracked files: false = none, true = all, or list of glob patterns
     copy_untracked = false,
@@ -260,6 +267,7 @@ require("vibe").setup({
 | `:VibeRename old new` | Rename a session |
 | `:VibeLog [name]` | View terminal scrollback log |
 | `:VibeHistory` | Show session history |
+| `:VibeGrid` | Toggle agent grid (show/hide all sessions in a grid) |
 | `:VibeHelp` | Context-sensitive help |
 
 ## Keymaps
@@ -302,6 +310,43 @@ In file buffers, the same actions are under `<leader>d`:
 *   `j` / `k`: Navigate files
 *   `<CR>`: Open file diff
 *   `A`: Accept all changes
+
+## Agent Grid
+
+When `enable_agent_grid` is set to `true`, Vibe can display all active sessions simultaneously in a grid layout on the right half of the screen. This is useful for monitoring multiple AI agents working in parallel.
+
+### Setup
+
+```lua
+require("vibe").setup({
+    enable_agent_grid = true,
+    agent_grid = {
+        max_sessions = 9, -- Max sessions per grid page (default: 9)
+    },
+})
+```
+
+### How It Works
+
+*   **`:Vibe` with sessions active:** Shows a menu with options to toggle the grid, create a new session, or open the session list.
+*   **`<leader>v` with sessions active:** Directly toggles grid visibility (no menu). Shows all sessions if hidden, hides all if visible.
+*   **`:VibeGrid`:** Explicitly toggles the grid on/off.
+*   **Grid layout:** Sessions are arranged in an auto-calculated grid (e.g., 2 sessions = 2x1 column, 4 = 2x2 grid). All cells have equal dimensions and fill the right half of the screen.
+*   **Window modes:** Works with both `window_mode = "float"` (grid of floating windows) and `window_mode = "split"` (grid of Neovim splits).
+*   **Pagination:** When the number of sessions exceeds `max_sessions`, the grid paginates. Use `<C-n>` / `<C-p>` in terminal mode to cycle between pages. A page indicator (`[1/3]`) appears in the first cell's title.
+
+### Grid Keymaps
+
+| Mode | Key | Action |
+|------|-----|--------|
+| Terminal | `<M-h/j/k/l>` | Navigate between grid cells |
+| Terminal | `<C-n>` | Next grid page (when paginated) |
+| Terminal | `<C-p>` | Previous grid page (when paginated) |
+| Terminal | `<Esc><Esc>` | Exit terminal mode |
+| Normal | `q` / `<Esc>` | Hide entire grid |
+| Normal | `<leader>v` | Toggle grid |
+
+When the grid is hidden, all sessions continue running in the background. Show the grid again with `<leader>v` or `:VibeGrid`.
 
 ## Statusline
 

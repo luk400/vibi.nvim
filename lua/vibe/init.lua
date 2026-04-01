@@ -29,6 +29,9 @@ local function smart_vibe(session_name_arg)
                 terminal.toggle(name, cwd)
             end)
         end)
+    elseif config.options.enable_agent_grid then
+        -- Grid mode: show grid menu
+        require("vibe.grid").show_menu()
     else
         -- One or more sessions: show list
         session.show_list()
@@ -328,10 +331,21 @@ function M.setup(opts)
         desc = "Merge changes from multiple Vibe worktrees using an AI agent",
     })
 
+    -- Create :VibeGrid command
+    vim.api.nvim_create_user_command("VibeGrid", function()
+        require("vibe.grid").toggle()
+    end, {
+        desc = "Toggle Vibe agent grid",
+    })
+
     -- Set up keybinding
     if config.options.keymap then
         vim.keymap.set("n", config.options.keymap, function()
-            smart_vibe()
+            if config.options.enable_agent_grid and vim.tbl_count(terminal.sessions) > 0 then
+                require("vibe.grid").toggle()
+            else
+                smart_vibe()
+            end
         end, { silent = true, desc = "Toggle Vibe terminal" })
     end
 

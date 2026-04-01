@@ -21,6 +21,9 @@ local M = {}
 ---@field review_user_additions boolean (deprecated) Use merge_mode instead
 ---@field raw_mode boolean (deprecated) No longer used
 
+---@class VibeAgentGridConfig
+---@field max_sessions integer Maximum sessions shown per grid page (default 9)
+
 ---@class VibeWorktreeConfig
 ---@field worktree_dir string|nil Custom directory for worktrees (defaults to stdpath("cache") .. "/vibe-worktrees")
 
@@ -53,6 +56,8 @@ local M = {}
 ---@field merge_mode "none"|"user"|"ai"|"both" Auto-merge mode for review
 ---@field diff VibeDiffConfig Diff display configuration
 ---@field highlights VibeHighlightConfig Highlight color configuration
+---@field enable_agent_grid boolean Enable agent grid mode (show all sessions in a grid)
+---@field agent_grid VibeAgentGridConfig Agent grid configuration
 ---@field worktree VibeWorktreeConfig Worktree configuration
 
 ---@type VibeConfig
@@ -144,6 +149,10 @@ M.defaults = {
         },
         overrides = {},
     },
+    enable_agent_grid = false,
+    agent_grid = {
+        max_sessions = 9,
+    },
     worktree = {
         -- Custom directory for worktrees (defaults to stdpath("cache") .. "/vibe-worktrees")
         worktree_dir = nil,
@@ -198,6 +207,14 @@ local function validate_options(options)
             vim.log.levels.WARN
         )
         options.merge_mode = "user"
+    end
+
+    if options.agent_grid and options.agent_grid.max_sessions then
+        local ms = options.agent_grid.max_sessions
+        if type(ms) ~= "number" or ms < 1 or math.floor(ms) ~= ms then
+            vim.notify("[Vibe] Invalid agent_grid.max_sessions (must be positive integer), falling back to 9", vim.log.levels.WARN)
+            options.agent_grid.max_sessions = 9
+        end
     end
 
     if options.highlights and options.highlights.theme then

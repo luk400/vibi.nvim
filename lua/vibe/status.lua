@@ -266,6 +266,13 @@ end
 
 --- Show status indicator (call this when any session is created)
 function M.show()
+    -- Don't show when agent grid is visible (grid itself shows all sessions)
+    if config.options.enable_agent_grid then
+        local ok, grid = pcall(require, "vibe.grid")
+        if ok and grid.state.visible then
+            return
+        end
+    end
     M.create_status_window()
 end
 

@@ -147,6 +147,19 @@ local function finalize_session(name, cwd, worktree_info)
                         has_terminal = false,
                         log_path = log_path,
                     })
+                    -- Refresh grid if active
+                    if config.options.enable_agent_grid then
+                        vim.schedule(function()
+                            local grid = require("vibe.grid")
+                            if grid.state.visible then
+                                if vim.tbl_count(M.sessions) > 0 then
+                                    grid.refresh()
+                                else
+                                    grid.hide_all()
+                                end
+                            end
+                        end)
+                    end
                 end
             end,
         })
@@ -220,13 +233,21 @@ end
 function M.show(name, cwd)
     name = name or "default"
 
+    -- Check if agent grid is active
+    local grid = config.options.enable_agent_grid and require("vibe.grid") or nil
+
     -- If session already exists, show it immediately
     local existing = M.sessions[name]
     if existing and vim.api.nvim_buf_is_valid(existing.bufnr) then
         save_buffers()
-        local window = require("vibe.window")
-        existing.winid = window.create(existing.bufnr, name)
-        vim.cmd("startinsert")
+        if grid and grid.state.visible then
+            grid.refresh()
+            grid.focus(name)
+        else
+            local window = require("vibe.window")
+            existing.winid = window.create(existing.bufnr, name)
+            vim.cmd("startinsert")
+        end
         M.current_session = name
         return
     end
@@ -237,9 +258,14 @@ function M.show(name, cwd)
             return
         end
         save_buffers()
-        local window = require("vibe.window")
-        session.winid = window.create(session.bufnr, name)
-        vim.cmd("startinsert")
+        if grid and grid.state.visible then
+            grid.refresh()
+            grid.focus(name)
+        else
+            local window = require("vibe.window")
+            session.winid = window.create(session.bufnr, name)
+            vim.cmd("startinsert")
+        end
         M.current_session = name
     end)
 end
@@ -247,6 +273,16 @@ end
 ---@param name string|nil
 function M.hide(name)
     name = name or M.current_session or "default"
+
+    -- In grid mode, hide the entire grid
+    if config.options.enable_agent_grid then
+        local grid = require("vibe.grid")
+        if grid.state.visible then
+            grid.hide_all()
+            return
+        end
+    end
+
     local session = M.sessions[name]
 
     if session and session.winid then
@@ -260,6 +296,14 @@ function M.hide(name)
 end
 
 function M.on_window_closed()
+    -- In grid mode, the grid's own WinClosed handler takes care of this
+    if config.options.enable_agent_grid then
+        local grid = require("vibe.grid")
+        if grid.state.visible then
+            return
+        end
+    end
+
     local name = M.current_session
     if name and M.sessions[name] then
         M.sessions[name].winid = nil
@@ -320,6 +364,22 @@ function M.kill(name)
         M.sessions[name] = nil
         if M.current_session == name then
             M.current_session = nil
+        end
+
+        -- Refresh or hide grid if active
+        if config.options.enable_agent_grid then
+            local grid = require("vibe.grid")
+            if grid.state.visible then
+                if vim.tbl_count(M.sessions) > 0 then
+                    vim.schedule(function()
+                        grid.refresh()
+                    end)
+                else
+                    vim.schedule(function()
+                        grid.hide_all()
+                    end)
+                end
+            end
         end
 
         status.hide()
@@ -392,6 +452,19 @@ function M.resume(persisted_session)
                         has_terminal = false,
                         log_path = log_path,
                     })
+                    -- Refresh grid if active
+                    if config.options.enable_agent_grid then
+                        vim.schedule(function()
+                            local grid = require("vibe.grid")
+                            if grid.state.visible then
+                                if vim.tbl_count(M.sessions) > 0 then
+                                    grid.refresh()
+                                else
+                                    grid.hide_all()
+                                end
+                            end
+                        end)
+                    end
                 end
             end,
         })
