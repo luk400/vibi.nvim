@@ -157,35 +157,55 @@ function M.setup(opts)
     })
 
     -- Create :VibeRename command
+    -- Usage: :VibeRename           — prompt for new name (renames current session)
+    --        :VibeRename new       — rename current session to "new"
+    --        :VibeRename old new   — rename "old" to "new"
     vim.api.nvim_create_user_command("VibeRename", function(args)
-        local parts_split = vim.split(args.args, "%s+")
-        if #parts_split < 2 then
-            vim.notify("[Vibe] Usage: :VibeRename old_name new_name", vim.log.levels.ERROR)
+        local parts = {}
+        for _, p in ipairs(vim.split(args.args, "%s+")) do
+            if p ~= "" then
+                table.insert(parts, p)
+            end
+        end
+
+        if #parts == 0 then
+            local old_name = terminal.current_session
+            if not old_name or not terminal.sessions[old_name] then
+                vim.notify("[Vibe] No current session to rename", vim.log.levels.ERROR)
+                return
+            end
+            session.prompt_session_name(old_name, function(new_name)
+                local ok, err = terminal.rename(old_name, new_name)
+                if ok then
+                    vim.notify("[Vibe] Renamed '" .. old_name .. "' -> '" .. new_name .. "'", vim.log.levels.INFO)
+                else
+                    vim.notify("[Vibe] " .. err, vim.log.levels.ERROR)
+                end
+            end)
             return
         end
-        local old_name = parts_split[1]
-        local new_name = parts_split[2]
-        if not terminal.sessions[old_name] then
-            vim.notify("[Vibe] Session '" .. old_name .. "' not found", vim.log.levels.ERROR)
-            return
+
+        local old_name, new_name
+        if #parts == 1 then
+            old_name = terminal.current_session
+            new_name = parts[1]
+            if not old_name or not terminal.sessions[old_name] then
+                vim.notify("[Vibe] No current session to rename", vim.log.levels.ERROR)
+                return
+            end
+        else
+            old_name = parts[1]
+            new_name = parts[2]
         end
-        if terminal.sessions[new_name] then
-            vim.notify("[Vibe] Session '" .. new_name .. "' already exists", vim.log.levels.ERROR)
-            return
+
+        local ok, err = terminal.rename(old_name, new_name)
+        if ok then
+            vim.notify("[Vibe] Renamed '" .. old_name .. "' -> '" .. new_name .. "'", vim.log.levels.INFO)
+        else
+            vim.notify("[Vibe] " .. err, vim.log.levels.ERROR)
         end
-        local sess = terminal.sessions[old_name]
-        terminal.sessions[new_name] = sess
-        terminal.sessions[old_name] = nil
-        sess.name = new_name
-        if terminal.current_session == old_name then
-            terminal.current_session = new_name
-        end
-        if sess.worktree_path and git.worktrees[sess.worktree_path] then
-            git.worktrees[sess.worktree_path].name = new_name
-        end
-        vim.notify("[Vibe] Renamed '" .. old_name .. "' -> '" .. new_name .. "'", vim.log.levels.INFO)
     end, {
-        nargs = "+",
+        nargs = "*",
         desc = "Rename a Vibe session",
         complete = function(_, _, _)
             return vim.tbl_keys(terminal.sessions)

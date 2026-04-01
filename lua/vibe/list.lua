@@ -62,7 +62,9 @@ function M.create(opts)
 
     local function refresh()
         all_lines = build_lines()
+        vim.bo[bufnr].modifiable = true
         vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, all_lines)
+        vim.bo[bufnr].modifiable = false
 
         -- Highlight header
         for i = 1, #header_lines do

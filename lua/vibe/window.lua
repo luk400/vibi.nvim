@@ -162,6 +162,17 @@ function M.create(bufnr, session_name)
     local opts = config.options
     local is_float = opts.window_mode ~= "split"
 
+    -- Resolve current session name from bufnr (handles rename)
+    local function current_name()
+        local term = require("vibe.terminal")
+        for _, sess in pairs(term.sessions) do
+            if sess.bufnr == bufnr then
+                return sess.name
+            end
+        end
+        return session_name
+    end
+
     local current_winid
 
     -- Float helpers (defined at function scope so the VimResized closure captures them)
@@ -181,7 +192,7 @@ function M.create(bufnr, session_name)
                 zindex = 50,
             }
             if session_name then
-                wc.title = " Vibe: " .. session_name .. " "
+                wc.title = " Vibe: " .. current_name() .. " "
                 wc.title_pos = "center"
             end
             return wc
@@ -204,7 +215,7 @@ function M.create(bufnr, session_name)
 
     -- Buffer-level keymaps (persist across window recreations)
     local close_fn = function()
-        require("vibe").toggle(session_name)
+        require("vibe").toggle(current_name())
     end
     vim.keymap.set("n", "q", close_fn, { buffer = bufnr, silent = true, desc = "Close Vibe window" })
     vim.keymap.set("n", "<Esc>", close_fn, { buffer = bufnr, silent = true, desc = "Close Vibe window" })
@@ -229,7 +240,7 @@ function M.create(bufnr, session_name)
         if #names <= 1 then
             return
         end
-        local current = term.current_session or session_name
+        local current = term.current_session or current_name()
         local current_idx = 1
         for i, n in ipairs(names) do
             if n == current then

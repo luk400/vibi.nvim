@@ -180,6 +180,12 @@ local function show_split_grid(page_sessions, show_page_indicator)
     local total_height = vim.o.lines - vim.o.cmdheight - 2
     local grid_width = math.floor(vim.o.columns * opts.width)
     local row_height = math.floor(total_height / rows)
+    local col_width = math.floor(grid_width / cols)
+
+    -- Temporarily disable equalalways to prevent Neovim from redistributing
+    -- space across ALL windows (including editor windows) during grid creation.
+    local saved_ea = vim.o.equalalways
+    vim.o.equalalways = false
 
     -- Build a rows x cols matrix of windows
     ---@type integer[][] grid_wins[row][col] = winid
@@ -210,6 +216,7 @@ local function show_split_grid(page_sessions, show_page_indicator)
     for r = 1, #grid_wins do
         if grid_wins[r][1] and vim.api.nvim_win_is_valid(grid_wins[r][1]) then
             vim.api.nvim_win_set_height(grid_wins[r][1], row_height)
+            vim.wo[grid_wins[r][1]].winfixheight = true
         end
     end
 
@@ -225,6 +232,21 @@ local function show_split_grid(page_sessions, show_page_indicator)
             grid_wins[r][c] = new_win
         end
     end
+
+    -- Step 4: Enforce column widths and lock dimensions
+    for r = 1, #grid_wins do
+        for c = 1, cols do
+            if grid_wins[r] and grid_wins[r][c] and vim.api.nvim_win_is_valid(grid_wins[r][c]) then
+                -- Last column absorbs rounding remainder
+                local w = (c == cols) and (grid_width - col_width * (cols - 1)) or col_width
+                vim.api.nvim_win_set_width(grid_wins[r][c], w)
+                vim.wo[grid_wins[r][c]].winfixwidth = true
+                vim.wo[grid_wins[r][c]].winfixheight = true
+            end
+        end
+    end
+
+    vim.o.equalalways = saved_ea
 
     -- Flatten to ordered list and record in state
     M.state.window_ids = {}
@@ -444,18 +466,14 @@ function M.setup_grid_autocmds()
 
     local is_float = config.options.window_mode ~= "split"
 
-    -- VimResized: re-layout for float, just resize PTYs for split
+    -- VimResized: re-layout grid to recalculate proportions
     vim.api.nvim_create_autocmd("VimResized", {
         group = M.state.augroup,
         callback = function()
             if not M.state.visible then
                 return
             end
-            if is_float then
-                M.refresh()
-            else
-                resize_all_ptys()
-            end
+            M.refresh()
         end,
     })
 

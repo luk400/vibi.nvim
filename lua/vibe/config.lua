@@ -41,6 +41,7 @@ local M = {}
 ---@field session_picker_keymap string|false Keybinding to open session picker in grid mode
 ---@field enable_agent_grid boolean Enable agent grid mode (show all sessions in a grid)
 ---@field agent_grid VibeAgentGridConfig Agent grid configuration
+---@field auto_scroll boolean Auto-scroll terminal to bottom on new output when window is unfocused (default true)
 ---@field worktree VibeWorktreeConfig Worktree configuration
 
 ---@type VibeConfig
@@ -91,6 +92,7 @@ M.defaults = {
     agent_grid = {
         max_sessions = 9,
     },
+    auto_scroll = true,
     worktree = {
         -- Custom directory for worktrees (defaults to stdpath("cache") .. "/vibe-worktrees")
         worktree_dir = nil,

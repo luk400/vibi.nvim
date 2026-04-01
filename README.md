@@ -16,7 +16,7 @@ This means the AI edits a "shadow" copy of your codebase. Your actual files rema
 *   **Worktree Isolation:** Automatically creates a git worktree and branch (`vibe-<uuid>`) for every session.
 *   **Floating Terminal:** Runs your specified command in a configurable floating window.
 *   **Smart Toggle:** `:Vibe` adapts to context — opens a directory picker with no sessions, toggles with one, or lists with many.
-*   **Session Rename:** Rename active sessions with `:VibeRename old new`.
+*   **Session Rename:** Rename the current session with `:VibeRename new_name` (or `:VibeRename old new` for explicit rename).
 *   **Session History:** Records completed sessions for later reference via `:VibeHistory`.
 *   **Terminal Logging:** Saves terminal scrollback to disk on session exit for post-mortem review via `:VibeLog`.
 *   **Diff & Review:** Virtual text diffs show exactly what the AI changed, with inline accept/reject.
@@ -31,6 +31,7 @@ This means the AI edits a "shadow" copy of your codebase. Your actual files rema
 *   **Agent Grid:** Display all sessions simultaneously in a grid layout with `enable_agent_grid = true`.
 *   **Session Picker:** Quick-jump to any grid session via `<leader>s` floating picker.
 *   **Grid-Aware Conflict Resolution:** `:VibeConflictResolution` integrates merge sessions into the agent grid when enabled.
+*   **Auto-Scroll:** Terminal buffers automatically scroll to follow new output when you're editing in another window (`auto_scroll = true` by default).
 *   **Clean Agent Windows:** Split-mode agent windows hide line numbers automatically.
 *   **which-key Integration:** Automatically registers `<leader>d` (Vibe Diff) and `<leader>v` (Vibe Terminal) groups.
 
@@ -78,6 +79,7 @@ require("vibe").setup({
   on_open = "save_all", -- "save_all", "save_current", "none"
   on_close = "reload",  -- "reload", "none"
   quit_protection = true, -- Warn on quit if sessions exist
+  auto_scroll = true, -- Auto-scroll terminal to bottom on new output when unfocused
 
   diff = {
     enabled = true,
@@ -270,7 +272,7 @@ require("vibe").setup({
 | `:VibeResume` | Resume paused session |
 | `:VibeStatus` | Print session summary |
 | `:VibeDiff` | Show inline diff for current file |
-| `:VibeRename old new` | Rename a session |
+| `:VibeRename [new]` | Rename current session (or `:VibeRename old new`) |
 | `:VibeLog [name]` | View terminal scrollback log |
 | `:VibeHistory` | Show session history |
 | `:VibeGrid` | Toggle agent grid (show/hide all sessions in a grid) |

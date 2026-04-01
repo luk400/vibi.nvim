@@ -109,6 +109,59 @@ local function reload_buffers()
     vim.cmd("checktime")
 end
 
+--- Auto-scroll: track pending scheduled scrolls per buffer
+local scroll_pending = {}
+
+--- Attach an on_lines listener that scrolls the terminal window to the bottom
+--- whenever new output arrives and the user is NOT focused on that window.
+---@param bufnr integer
+local function setup_auto_scroll(bufnr)
+    if config.options.auto_scroll == false then
+        return
+    end
+
+    vim.api.nvim_buf_attach(bufnr, false, {
+        on_lines = function(_, buf)
+            if not vim.api.nvim_buf_is_valid(buf) then
+                scroll_pending[buf] = nil
+                return true -- detach
+            end
+
+            if scroll_pending[buf] then
+                return
+            end
+            scroll_pending[buf] = true
+
+            vim.schedule(function()
+                scroll_pending[buf] = nil
+
+                -- Find the session for this buffer
+                local session
+                for _, s in pairs(M.sessions) do
+                    if s.bufnr == buf then
+                        session = s
+                        break
+                    end
+                end
+                if not session then return end
+
+                -- Only scroll if window exists and user is NOT in it
+                local winid = session.winid
+                if not winid or not vim.api.nvim_win_is_valid(winid) then
+                    return
+                end
+                if vim.api.nvim_get_current_win() == winid then
+                    return
+                end
+
+                -- Scroll to bottom
+                local line_count = vim.api.nvim_buf_line_count(buf)
+                vim.api.nvim_win_set_cursor(winid, { line_count, 0 })
+            end)
+        end,
+    })
+end
+
 --- Create the terminal buffer and session object from a worktree_info (shared by get_or_create and resume)
 ---@param name string
 ---@param cwd string
@@ -127,15 +180,23 @@ local function finalize_session(name, cwd, worktree_info)
         job_id = vim.fn.termopen(config.options.command, {
             cwd = worktree_info.worktree_path,
             on_exit = function(_, exit_code)
-                local log_path = dump_scrollback_log(bufnr, name)
+                -- Resolve current name by bufnr (handles rename)
+                local current_name = name
+                for sname, sess in pairs(M.sessions) do
+                    if sess.bufnr == bufnr then
+                        current_name = sname
+                        break
+                    end
+                end
+                local log_path = dump_scrollback_log(bufnr, current_name)
                 if exit_code ~= 0 then
                     vim.notify(string.format("[Vibe] Command exited with code %d", exit_code), vim.log.levels.WARN)
                 end
-                if M.sessions[name] then
-                    M.sessions[name] = nil
+                if M.sessions[current_name] then
+                    M.sessions[current_name] = nil
                     status.hide()
                     persist.save_session({
-                        name = name,
+                        name = current_name,
                         worktree_path = worktree_info.worktree_path,
                         branch = worktree_info.branch,
                         snapshot_commit = worktree_info.snapshot_commit,
@@ -185,6 +246,7 @@ local function finalize_session(name, cwd, worktree_info)
 
     M.sessions[name] = session
     M.current_session = name
+    setup_auto_scroll(bufnr)
 
     status.show()
     return session
@@ -432,15 +494,23 @@ function M.resume(persisted_session)
         job_id = vim.fn.termopen(config.options.command, {
             cwd = persisted_session.worktree_path,
             on_exit = function(_, exit_code)
-                local log_path = dump_scrollback_log(bufnr, name)
+                -- Resolve current name by bufnr (handles rename)
+                local current_name = name
+                for sname, sess in pairs(M.sessions) do
+                    if sess.bufnr == bufnr then
+                        current_name = sname
+                        break
+                    end
+                end
+                local log_path = dump_scrollback_log(bufnr, current_name)
                 if exit_code ~= 0 then
                     vim.notify(string.format("[Vibe] Command exited with code %d", exit_code), vim.log.levels.WARN)
                 end
-                if M.sessions[name] then
-                    M.sessions[name] = nil
+                if M.sessions[current_name] then
+                    M.sessions[current_name] = nil
                     status.hide()
                     persist.save_session({
-                        name = name,
+                        name = current_name,
                         worktree_path = persisted_session.worktree_path,
                         branch = persisted_session.branch,
                         snapshot_commit = persisted_session.snapshot_commit,
@@ -488,6 +558,7 @@ function M.resume(persisted_session)
 
     M.sessions[name] = session
     M.current_session = name
+    setup_auto_scroll(bufnr)
 
     persist.save_session(vim.tbl_extend("force", persisted_session, { has_terminal = true }))
 
@@ -497,6 +568,102 @@ end
 
 function M.get_session(name)
     return M.sessions[name]
+end
+
+--- Rename a session, updating all state locations
+---@param old_name string
+---@param new_name string
+---@return boolean ok
+---@return string|nil err
+function M.rename(old_name, new_name)
+    local sess = M.sessions[old_name]
+    if not sess then
+        return false, "Session '" .. old_name .. "' not found"
+    end
+    if M.sessions[new_name] then
+        return false, "Session '" .. new_name .. "' already exists"
+    end
+
+    -- 1. Move session in table
+    M.sessions[new_name] = sess
+    M.sessions[old_name] = nil
+
+    -- 2. Update name field
+    sess.name = new_name
+
+    -- 3. Update current_session
+    if M.current_session == old_name then
+        M.current_session = new_name
+    end
+
+    -- 4. Update git worktree metadata
+    if sess.worktree_path and git.worktrees[sess.worktree_path] then
+        git.worktrees[sess.worktree_path].name = new_name
+    end
+
+    -- 5. Persist to disk
+    if sess.worktree_path then
+        local wt = git.worktrees[sess.worktree_path]
+        if wt then
+            persist.save_session({
+                name = new_name,
+                worktree_path = sess.worktree_path,
+                branch = wt.branch,
+                snapshot_commit = wt.snapshot_commit,
+                original_branch = wt.original_branch,
+                repo_root = wt.repo_root,
+                cwd = sess.cwd,
+                created_at = sess.created_at or wt.created_at,
+                last_active = os.time(),
+                has_terminal = true,
+            })
+        end
+    end
+
+    -- 6. Migrate status activity tracking
+    if status.last_activity[old_name] then
+        status.last_activity[new_name] = status.last_activity[old_name]
+        status.last_activity[old_name] = nil
+    end
+
+    -- 7. Update window title
+    if sess.winid and vim.api.nvim_win_is_valid(sess.winid) then
+        local win_cfg = vim.api.nvim_win_get_config(sess.winid)
+        if win_cfg.relative and win_cfg.relative ~= "" then
+            pcall(vim.api.nvim_win_set_config, sess.winid, {
+                title = " Vibe: " .. new_name .. " ",
+                title_pos = "center",
+            })
+        else
+            vim.wo[sess.winid].winbar = " Vibe: " .. new_name .. " "
+        end
+    end
+
+    -- 8. Update grid state if visible
+    if config.options.enable_agent_grid then
+        local ok, grid = pcall(require, "vibe.grid")
+        if ok and grid.state and grid.state.visible then
+            for _, entry in ipairs(grid.state.window_ids or {}) do
+                if entry.name == old_name then
+                    entry.name = new_name
+                    if vim.api.nvim_win_is_valid(entry.winid) then
+                        local gcfg = vim.api.nvim_win_get_config(entry.winid)
+                        if gcfg.relative and gcfg.relative ~= "" then
+                            pcall(vim.api.nvim_win_set_config, entry.winid, {
+                                title = " Vibe: " .. new_name .. " ",
+                                title_pos = "center",
+                            })
+                        else
+                            vim.wo[entry.winid].winbar = " Vibe: " .. new_name .. " "
+                        end
+                    end
+                    break
+                end
+            end
+        end
+    end
+
+    return true, nil
 end
 
 --- Cancel a pending worktree creation
