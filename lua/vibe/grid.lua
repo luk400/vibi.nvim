@@ -262,16 +262,37 @@ local function show_split_grid(page_sessions, show_page_indicator)
         end
     end
 
-    -- Step 4: Enforce column widths and lock dimensions
+    -- Step 4: Enforce column widths and lock dimensions.
+    -- Each row may have fewer windows than `cols` (partial last row).  A lone
+    -- window that was never split horizontally is a direct child of the
+    -- vertical container — setting its width to col_width would shrink the
+    -- entire grid.  We therefore size each row based on its *actual* window
+    -- count.
     for r = 1, #grid_wins do
+        local actual_cols = 0
         for c = 1, cols do
             if grid_wins[r] and grid_wins[r][c] and vim.api.nvim_win_is_valid(grid_wins[r][c]) then
-                -- Last column absorbs rounding remainder (within usable width)
-                local usable_width = grid_width - width_overhead
-                local w = (c == cols) and (usable_width - col_width * (cols - 1)) or col_width
-                vim.api.nvim_win_set_width(grid_wins[r][c], w)
-                vim.wo[grid_wins[r][c]].winfixwidth = true
-                vim.wo[grid_wins[r][c]].winfixheight = true
+                actual_cols = actual_cols + 1
+            end
+        end
+
+        for c = 1, actual_cols do
+            local win = grid_wins[r][c]
+            if win and vim.api.nvim_win_is_valid(win) then
+                local w
+                if actual_cols == 1 then
+                    w = grid_width
+                else
+                    local row_overhead = actual_cols - 1
+                    local row_usable = grid_width - row_overhead
+                    local row_col_w = math.floor(row_usable / actual_cols)
+                    w = (c == actual_cols)
+                        and (row_usable - row_col_w * (actual_cols - 1))
+                        or row_col_w
+                end
+                vim.api.nvim_win_set_width(win, w)
+                vim.wo[win].winfixwidth = true
+                vim.wo[win].winfixheight = true
             end
         end
     end

@@ -303,9 +303,18 @@ function M.show(name, cwd)
     local existing = M.sessions[name]
     if existing and vim.api.nvim_buf_is_valid(existing.bufnr) then
         save_buffers()
-        if grid and grid.state.visible then
-            grid.refresh()
-            grid.focus_or_navigate(name)
+        if grid then
+            if grid.state.visible then
+                grid.refresh()
+                grid.focus_or_navigate(name)
+            elseif vim.tbl_count(M.sessions) > 1 then
+                grid.show_all()
+                grid.focus_or_navigate(name)
+            else
+                local window = require("vibe.window")
+                existing.winid = window.create(existing.bufnr, name)
+                vim.cmd("startinsert")
+            end
         else
             local window = require("vibe.window")
             existing.winid = window.create(existing.bufnr, name)
@@ -321,9 +330,18 @@ function M.show(name, cwd)
             return
         end
         save_buffers()
-        if grid and grid.state.visible then
-            grid.refresh()
-            grid.focus_or_navigate(name)
+        if grid then
+            if grid.state.visible then
+                grid.refresh()
+                grid.focus_or_navigate(name)
+            elseif vim.tbl_count(M.sessions) > 1 then
+                grid.show_all()
+                grid.focus_or_navigate(name)
+            else
+                local window = require("vibe.window")
+                session.winid = window.create(session.bufnr, name)
+                vim.cmd("startinsert")
+            end
         else
             local window = require("vibe.window")
             session.winid = window.create(session.bufnr, name)
