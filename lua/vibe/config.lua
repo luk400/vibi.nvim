@@ -7,6 +7,10 @@ local M = {}
 ---@field max_sessions integer Maximum sessions shown per grid page (default 9)
 ---@field maximize_keymap string|false Keybinding to toggle maximize in grid mode (default "<leader>m")
 
+---@class VibeLargeFileConfig
+---@field threshold integer Size in bytes above which a file is considered "large" (default 1048576 = 1MB)
+---@field enabled boolean Enable large file detection dialog before review (default true)
+
 ---@class VibeWorktreeConfig
 ---@field worktree_dir string|nil Custom directory for worktrees (defaults to stdpath("cache") .. "/vibe-worktrees")
 
@@ -44,6 +48,7 @@ local M = {}
 ---@field agent_grid VibeAgentGridConfig Agent grid configuration
 ---@field auto_scroll boolean Auto-scroll terminal to bottom on new output when window is unfocused (default true)
 ---@field worktree VibeWorktreeConfig Worktree configuration
+---@field large_files VibeLargeFileConfig Large file detection and handling configuration
 
 ---@type VibeConfig
 M.defaults = {
@@ -98,6 +103,10 @@ M.defaults = {
     worktree = {
         -- Custom directory for worktrees (defaults to stdpath("cache") .. "/vibe-worktrees")
         worktree_dir = nil,
+    },
+    large_files = {
+        threshold = 1048576, -- 1MB in bytes
+        enabled = true,
     },
 }
 

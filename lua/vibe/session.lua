@@ -294,71 +294,98 @@ function M.show_review_list()
             end
             close()
 
-            -- Show review mode picker as float (4 options)
-            local mode_lines = {
-                " Select Merge Mode",
-                " " .. string.rep("─", 50),
-                " 1. Auto-Merge All Safe (only review true conflicts)",
-                " 2. Auto-Merge User Only (review AI suggestions + conflicts)",
-                " 3. Auto-Merge AI Only (review your changes + conflicts)",
-                " 4. Review Everything (review all changes)",
-                "",
-                " <CR> select  q cancel",
-            }
-            -- Map line numbers to merge modes
-            local line_to_mode = { [3] = "both", [4] = "user", [5] = "ai", [6] = "none" }
-            local first_mode_line = 3
-            local last_mode_line = 6
-            -- Default cursor to line 4 (Auto-Merge User Only, matching default merge_mode)
-            local default_line = 4
+            -- Check for large files before showing mode picker
+            local changed_files = git.get_worktree_changed_files(info.worktree_path)
+            local large_files_mod = require("vibe.large_files")
 
-            local mode_bufnr, mode_winid, mode_close = util.create_centered_float({
-                lines = mode_lines,
-                filetype = "vibe_mode_select",
-                min_width = 60,
-                no_default_keymaps = true,
-            })
-            vim.api.nvim_win_set_cursor(mode_winid, { default_line, 2 })
-            vim.api.nvim_buf_add_highlight(mode_bufnr, -1, "Title", 0, 0, -1)
-            vim.wo[mode_winid].cursorline = true
+            local function show_mode_picker()
+                -- Show review mode picker as float (4 options)
+                local mode_lines = {
+                    " Select Merge Mode",
+                    " " .. string.rep("\xe2\x94\x80", 50),
+                    " 1. Auto-Merge All Safe (only review true conflicts)",
+                    " 2. Auto-Merge User Only (review AI suggestions + conflicts)",
+                    " 3. Auto-Merge AI Only (review your changes + conflicts)",
+                    " 4. Review Everything (review all changes)",
+                    "",
+                    " <CR> select  q cancel",
+                }
+                -- Map line numbers to merge modes
+                local line_to_mode = { [3] = "both", [4] = "user", [5] = "ai", [6] = "none" }
+                local first_mode_line = 3
+                local last_mode_line = 6
+                -- Default cursor to line 4 (Auto-Merge User Only, matching default merge_mode)
+                local default_line = 4
 
-            local function mode_select()
-                local cursor = vim.api.nvim_win_get_cursor(mode_winid)[1]
-                local mode = line_to_mode[cursor] or "user"
-                mode_close()
-                require("vibe.dialog").show(info.worktree_path, info, mode)
+                local mode_bufnr, mode_winid, mode_close = util.create_centered_float({
+                    lines = mode_lines,
+                    filetype = "vibe_mode_select",
+                    min_width = 60,
+                    no_default_keymaps = true,
+                })
+                vim.api.nvim_win_set_cursor(mode_winid, { default_line, 2 })
+                vim.api.nvim_buf_add_highlight(mode_bufnr, -1, "Title", 0, 0, -1)
+                vim.wo[mode_winid].cursorline = true
+
+                local function mode_select()
+                    local cursor = vim.api.nvim_win_get_cursor(mode_winid)[1]
+                    local mode = line_to_mode[cursor] or "user"
+                    mode_close()
+                    require("vibe.dialog").show(info.worktree_path, info, mode)
+                end
+                local function mode_cancel()
+                    mode_close()
+                    M.show_review_list()
+                end
+                vim.keymap.set("n", "<CR>", mode_select, { buffer = mode_bufnr, silent = true })
+                vim.keymap.set("n", "q", mode_cancel, { buffer = mode_bufnr, silent = true })
+                vim.keymap.set("n", "<Esc>", mode_cancel, { buffer = mode_bufnr, silent = true })
+                vim.keymap.set("n", "j", function()
+                    local cursor = vim.api.nvim_win_get_cursor(mode_winid)[1]
+                    if cursor < last_mode_line then
+                        vim.api.nvim_win_set_cursor(mode_winid, { cursor + 1, 2 })
+                    end
+                end, { buffer = mode_bufnr, silent = true })
+                vim.keymap.set("n", "<Down>", function()
+                    local cursor = vim.api.nvim_win_get_cursor(mode_winid)[1]
+                    if cursor < last_mode_line then
+                        vim.api.nvim_win_set_cursor(mode_winid, { cursor + 1, 2 })
+                    end
+                end, { buffer = mode_bufnr, silent = true })
+                vim.keymap.set("n", "k", function()
+                    local cursor = vim.api.nvim_win_get_cursor(mode_winid)[1]
+                    if cursor > first_mode_line then
+                        vim.api.nvim_win_set_cursor(mode_winid, { cursor - 1, 2 })
+                    end
+                end, { buffer = mode_bufnr, silent = true })
+                vim.keymap.set("n", "<Up>", function()
+                    local cursor = vim.api.nvim_win_get_cursor(mode_winid)[1]
+                    if cursor > first_mode_line then
+                        vim.api.nvim_win_set_cursor(mode_winid, { cursor - 1, 2 })
+                    end
+                end, { buffer = mode_bufnr, silent = true })
             end
-            local function mode_cancel()
-                mode_close()
+
+            large_files_mod.show(info.worktree_path, info, changed_files, function(decisions)
+                -- Execute immediate actions (copy over files, record ignores)
+                large_files_mod.execute_decisions(info.worktree_path, info, decisions)
+                large_files_mod.save_decisions(info.worktree_path, decisions)
+
+                -- Check if there are still unresolved files after large file handling
+                if #git.get_unresolved_files(info.worktree_path) == 0 then
+                    if #git.get_worktree_changed_files(info.worktree_path) > 0 then
+                        git.update_snapshot(info.worktree_path)
+                    end
+                    vim.notify("[Vibe] All files handled. No remaining files to review.", vim.log.levels.INFO)
+                    vim.defer_fn(M.show_review_list, 100)
+                    return
+                end
+
+                show_mode_picker()
+            end, function()
+                -- On cancel, go back to review list
                 M.show_review_list()
-            end
-            vim.keymap.set("n", "<CR>", mode_select, { buffer = mode_bufnr, silent = true })
-            vim.keymap.set("n", "q", mode_cancel, { buffer = mode_bufnr, silent = true })
-            vim.keymap.set("n", "<Esc>", mode_cancel, { buffer = mode_bufnr, silent = true })
-            vim.keymap.set("n", "j", function()
-                local cursor = vim.api.nvim_win_get_cursor(mode_winid)[1]
-                if cursor < last_mode_line then
-                    vim.api.nvim_win_set_cursor(mode_winid, { cursor + 1, 2 })
-                end
-            end, { buffer = mode_bufnr, silent = true })
-            vim.keymap.set("n", "<Down>", function()
-                local cursor = vim.api.nvim_win_get_cursor(mode_winid)[1]
-                if cursor < last_mode_line then
-                    vim.api.nvim_win_set_cursor(mode_winid, { cursor + 1, 2 })
-                end
-            end, { buffer = mode_bufnr, silent = true })
-            vim.keymap.set("n", "k", function()
-                local cursor = vim.api.nvim_win_get_cursor(mode_winid)[1]
-                if cursor > first_mode_line then
-                    vim.api.nvim_win_set_cursor(mode_winid, { cursor - 1, 2 })
-                end
-            end, { buffer = mode_bufnr, silent = true })
-            vim.keymap.set("n", "<Up>", function()
-                local cursor = vim.api.nvim_win_get_cursor(mode_winid)[1]
-                if cursor > first_mode_line then
-                    vim.api.nvim_win_set_cursor(mode_winid, { cursor - 1, 2 })
-                end
-            end, { buffer = mode_bufnr, silent = true })
+            end)
         end
     end, { buffer = bufnr, silent = true })
 

@@ -74,6 +74,20 @@ function M.show(worktree_path, worktree_info, review_mode)
     M.current_worktree_path = worktree_path
     M.current_session_name = info.name
     local unresolved, ignored_count = git.get_unresolved_files(worktree_path)
+
+    -- Filter out files handled by large file decisions (ignore/copy_over)
+    local lf_decisions = require("vibe.large_files").load_decisions(worktree_path)
+    if next(lf_decisions) then
+        local filtered = {}
+        for _, f in ipairs(unresolved) do
+            local d = lf_decisions[f]
+            if not d or d == "merge" then
+                table.insert(filtered, f)
+            end
+        end
+        unresolved = filtered
+    end
+
     M.changed_files = unresolved
     M.ignored_count = ignored_count or 0
     M.hunk_cache = {}

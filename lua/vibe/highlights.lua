@@ -61,6 +61,13 @@ function M.apply()
         VibePickerHeader       = { default = true, link = "Title" },
         VibePickerFooter       = { default = true, link = "Comment" },
 
+        -- Large file dialog highlights
+        VibeLargeFileIgnore    = { default = true, fg = "#6c7086", italic = true },
+        VibeLargeFileCopyOver  = { default = true, fg = "#a6e3a1", bold = true },
+        VibeLargeFileMerge     = { default = true, fg = "#f9e2af", bold = true },
+        VibeLargeFileDir       = { default = true, fg = "#89b4fa", bold = true },
+        VibeLargeFileSize      = { default = true, link = "Comment" },
+
         -- Status highlight
         VibeActive             = { link = "WarningMsg" },
     }

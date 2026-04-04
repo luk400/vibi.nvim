@@ -82,6 +82,22 @@ function M.is_file_fully_addressed(worktree_path, filepath)
     return apply.is_file_fully_addressed(M.worktrees, worktree_path, filepath, M.get_worktree_file_hunks)
 end
 
+--- Compute a fast file checksum without loading into Lua memory.
+---@param path string
+---@return string|nil hash
+local function file_checksum(path)
+    local cmd
+    if vim.fn.executable("md5sum") == 1 then
+        cmd = "md5sum " .. vim.fn.shellescape(path)
+    elseif vim.fn.executable("md5") == 1 then
+        cmd = "md5 -q " .. vim.fn.shellescape(path)
+    else
+        return nil
+    end
+    local result = vim.fn.system(cmd)
+    return (result or ""):match("^(%S+)")
+end
+
 -- Composite functions that use multiple submodules
 function M.get_worktree_changed_files(worktree_path)
     local info = M.worktrees[worktree_path]
@@ -174,8 +190,20 @@ function M.get_unresolved_files(worktree_path)
     local changed_files, ignored_count = M.get_worktree_changed_files(worktree_path)
     local unresolved = {}
 
+    local config = require("vibe.config")
+    local threshold = config.options.large_files and config.options.large_files.threshold or 1048576
+
     for _, filepath in ipairs(changed_files) do
-        if not M.is_file_fully_addressed(worktree_path, filepath) then
+        -- Skip files already handled by large file decisions
+        local skip = false
+        if info.large_file_decisions and info.large_file_decisions[filepath] then
+            local decision = info.large_file_decisions[filepath]
+            if decision == "ignore" or decision == "copy_over" then
+                skip = true
+            end
+        end
+
+        if not skip and not M.is_file_fully_addressed(worktree_path, filepath) then
             local worktree_file = worktree_path .. "/" .. filepath
             local user_file = info.repo_root .. "/" .. filepath
 
@@ -185,16 +213,33 @@ function M.get_unresolved_files(worktree_path)
             if (worktree_exists and not user_exists) or (not worktree_exists and user_exists) then
                 table.insert(unresolved, filepath)
             elseif worktree_exists and user_exists then
-                local worktree_lines = vim.fn.readfile(worktree_file)
-                local user_lines = vim.fn.readfile(user_file)
+                local wt_size = vim.fn.getfsize(worktree_file)
+                local user_size = vim.fn.getfsize(user_file)
 
-                if #worktree_lines ~= #user_lines then
-                    table.insert(unresolved, filepath)
-                else
-                    for i = 1, #worktree_lines do
-                        if worktree_lines[i] ~= user_lines[i] then
+                if wt_size > threshold or user_size > threshold then
+                    -- Fast path for large files: compare size, then checksum
+                    if wt_size ~= user_size then
+                        table.insert(unresolved, filepath)
+                    else
+                        local wt_hash = file_checksum(worktree_file)
+                        local user_hash = file_checksum(user_file)
+                        if not wt_hash or not user_hash or wt_hash ~= user_hash then
                             table.insert(unresolved, filepath)
-                            break
+                        end
+                    end
+                else
+                    -- Normal path for regular files: line-by-line comparison
+                    local worktree_lines = vim.fn.readfile(worktree_file)
+                    local user_lines = vim.fn.readfile(user_file)
+
+                    if #worktree_lines ~= #user_lines then
+                        table.insert(unresolved, filepath)
+                    else
+                        for i = 1, #worktree_lines do
+                            if worktree_lines[i] ~= user_lines[i] then
+                                table.insert(unresolved, filepath)
+                                break
+                            end
                         end
                     end
                 end
@@ -271,6 +316,7 @@ function M.update_snapshot(worktree_path)
     info.snapshot_commit = commit_hash:gsub("^%s+", ""):gsub("%s+$", "")
     info.addressed_hunks = {}
     info.manually_modified_files = {}
+    info.large_file_decisions = {}
 
     -- Persist to disk
     local persisted = persist.load_sessions()
@@ -278,6 +324,7 @@ function M.update_snapshot(worktree_path)
         if s.worktree_path == worktree_path then
             s.snapshot_commit = info.snapshot_commit
             s.addressed_hunks = {}
+            s.large_file_decisions = {}
             break
         end
     end

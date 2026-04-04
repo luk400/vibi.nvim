@@ -330,6 +330,7 @@ function M.create_worktree(session_name, repo_cwd)
         uuid = uuid,
         created_at = created_at,
         addressed_hunks = {},
+        large_file_decisions = {},
     }
     M.worktrees[worktree_path] = info
 
@@ -508,6 +509,7 @@ function M.create_worktree_async(session_name, repo_cwd, callback)
                     uuid = uuid,
                     created_at = created_at,
                     addressed_hunks = {},
+                    large_file_decisions = {},
                 }
                 M.worktrees[worktree_path] = info
 
@@ -656,6 +658,7 @@ function M.scan_for_vibe_worktrees()
                         addressed_hunks = persisted_info and persisted_info.addressed_hunks or {},
                         manually_modified_files = persisted_info and persisted_info.manually_modified_files or {},
                         source_worktrees = persisted_info and persisted_info.source_worktrees or nil,
+                        large_file_decisions = persisted_info and persisted_info.large_file_decisions or {},
                     }
                 end
             end
