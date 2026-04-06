@@ -135,6 +135,8 @@ function M.check_remaining_files(worktree_path, review_mode)
 
             if has_other_sessions then
                 require("vibe.session").show_review_list()
+            else
+                require("vibe.session").restore_return_location()
             end
         end, 200)
         return

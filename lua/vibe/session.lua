@@ -6,6 +6,35 @@ local util = require("vibe.util")
 
 local M = {}
 
+-- Originating buffer/window captured when :VibeReview is invoked.
+-- Restored once all changes are reviewed (natural completion only).
+M._return_buf = nil
+M._return_win = nil
+
+function M.capture_return_location()
+    M._return_buf = vim.api.nvim_get_current_buf()
+    M._return_win = vim.api.nvim_get_current_win()
+end
+
+function M.restore_return_location()
+    local buf = M._return_buf
+    local win = M._return_win
+    M._return_buf = nil
+    M._return_win = nil
+    if not buf or not vim.api.nvim_buf_is_valid(buf) then
+        return
+    end
+    if win and vim.api.nvim_win_is_valid(win) then
+        vim.api.nvim_set_current_win(win)
+        if vim.api.nvim_win_get_buf(win) ~= buf then
+            vim.api.nvim_win_set_buf(win, buf)
+        end
+    else
+        -- Originating window is gone — fall back to editing the buffer in the current window.
+        vim.api.nvim_set_current_buf(buf)
+    end
+end
+
 -- Named constants for list layout calculations
 local LIST_HEADER_LINES = 2 -- Title + separator line
 local LIST_LINES_PER_SESSION = 2 -- Name line + detail line
@@ -233,6 +262,7 @@ function M.show_review_list()
     local worktrees = git.get_worktrees_with_unresolved_files()
     if #worktrees == 0 then
         vim.notify("[Vibe] No sessions with unresolved changes", vim.log.levels.INFO)
+        M.restore_return_location()
         return
     end
 

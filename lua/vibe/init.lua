@@ -120,6 +120,7 @@ function M.setup(opts)
 
     -- Create :VibeReview command to review changes from AI sessions
     vim.api.nvim_create_user_command("VibeReview", function()
+        session.capture_return_location()
         session.show_review_list()
     end, {
         desc = "Review changes from AI sessions",
