@@ -14,6 +14,8 @@ M.DESC_SCROLL_DOWN = "Scroll preview down"
 M.DESC_SCROLL_UP = "Scroll preview up"
 M.DESC_QUIT = "Quit review"
 M.DESC_DONE = "Accept file and continue"
+M.DESC_ACCEPT_ALL_CONFLICTS = "Accept AI in all conflicts"
+M.DESC_REJECT_ALL_CONFLICTS = "Reject AI in all conflicts"
 
 --- Convert raw lhs (leader-expanded) back to <leader>X display form
 ---@param lhs string Raw lhs from nvim_buf_get_keymap (leader already expanded)

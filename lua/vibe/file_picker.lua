@@ -255,11 +255,23 @@ function M.render()
     local lines = {}
     local hl_data = {} -- {line_idx, hl_group}
 
-    -- Header
+    -- Hint bar at top
+    table.insert(
+        lines,
+        string.format("%d file(s) selected  |  <Space> toggle  |  <C-y> confirm  |  q cancel", count_selected())
+    )
+    table.insert(hl_data, { 0, "VibePickerFooter" })
+    table.insert(lines, "────────────────────────────────────────")
+    table.insert(hl_data, { 1, "VibePickerFooter" })
+
+    -- Header (current path)
     local path_display = M.current_path == "" and "/" or ("/" .. M.current_path .. "/")
     table.insert(lines, "  Copy files to worktree: " .. path_display)
-    table.insert(hl_data, { 0, "VibePickerHeader" })
+    table.insert(hl_data, { #lines - 1, "VibePickerHeader" })
     table.insert(lines, "")
+
+    -- 4 lines of header (hint, separator, path, blank) before items
+    local items_offset = 4
 
     local has_parent = M.current_path ~= ""
     local item_idx = 0
@@ -316,16 +328,6 @@ function M.render()
         table.insert(hl_data, { #lines - 1, "Comment" })
     end
 
-    -- Footer
-    table.insert(lines, "")
-    table.insert(lines, "────────────────────────────────────────")
-    table.insert(hl_data, { #lines - 1, "VibePickerFooter" })
-    table.insert(
-        lines,
-        string.format("%d file(s) selected  |  <Space> toggle  |  <C-y> confirm  |  q cancel", count_selected())
-    )
-    table.insert(hl_data, { #lines - 1, "VibePickerFooter" })
-
     vim.bo[M.bufnr].modifiable = true
     vim.api.nvim_buf_set_lines(M.bufnr, 0, -1, false, lines)
     vim.bo[M.bufnr].modifiable = false
@@ -337,7 +339,7 @@ function M.render()
 
     -- Scroll to keep selected item visible
     if M.winid and vim.api.nvim_win_is_valid(M.winid) then
-        local cursor_line = M.selected_idx + 2 -- +2 for header + blank (1-indexed)
+        local cursor_line = M.selected_idx + items_offset -- 1-indexed line of selected item
         if cursor_line > #lines then
             cursor_line = #lines
         end

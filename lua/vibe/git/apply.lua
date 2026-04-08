@@ -215,10 +215,12 @@ end
 ---@param filepath string Relative file path
 ---@param merge_mode string "none"|"user"|"ai"|"both"
 ---@param repo_root string|nil Repo root (derived from worktree info if nil)
+---@param conflict_resolution string|nil "ai" or "user" — when set, force-resolve all CONFLICTs
+---       to that side instead of returning ("conflicts", count).
 ---@return boolean ok
----@return string|nil error_reason ("conflicts" when conflicts exist)
+---@return string|nil error_reason ("conflicts" when conflicts exist and not force-resolved)
 ---@return number conflict_count
-function M.merge_accept_file(worktrees, worktree_path, filepath, merge_mode, repo_root)
+function M.merge_accept_file(worktrees, worktree_path, filepath, merge_mode, repo_root, conflict_resolution)
     local merge = require("vibe.review.merge")
     local info = worktrees[worktree_path]
     if not info then
@@ -226,7 +228,7 @@ function M.merge_accept_file(worktrees, worktree_path, filepath, merge_mode, rep
     end
     repo_root = repo_root or info.repo_root
 
-    local result = merge.merge_file(worktree_path, filepath, repo_root, merge_mode)
+    local result = merge.merge_file(worktree_path, filepath, repo_root, merge_mode, conflict_resolution)
 
     -- File already in desired state (e.g. both deleted, user-only new file)
     if result.auto_accept then

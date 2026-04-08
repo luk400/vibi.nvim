@@ -178,6 +178,9 @@ function M.is_open()
     return M.dialog_winid ~= nil and vim.api.nvim_win_is_valid(M.dialog_winid)
 end
 
+--- Number of header lines (hint bar + separator + mode label) before the first file row
+local FILES_OFFSET = 4
+
 function M.render()
     if not M.dialog_bufnr then
         return
@@ -185,6 +188,30 @@ function M.render()
 
     local review_types = require("vibe.review.types")
     local lines = {}
+
+    -- Hint bar at top
+    local function dialog_key(desc, fallback)
+        local maps = vim.api.nvim_buf_get_keymap(M.dialog_bufnr, "n")
+        for _, map in ipairs(maps) do
+            if map.desc == desc then
+                local kd = require("vibe.review.keymap_display")
+                return kd.format_key_display(map.lhs)
+            end
+        end
+        return fallback
+    end
+    local k_accept = dialog_key("Accept file", "<leader>a")
+    local k_reject = dialog_key("Reject file", "<leader>r")
+    table.insert(
+        lines,
+        string.format(
+            "<CR> view  |  %s accept  |  %s reject  |  A accept all  |  cA accept AI conflicts  |  cR reject AI conflicts  |  q back",
+            k_accept,
+            k_reject
+        )
+    )
+    table.insert(lines, "────────────────────────────────────────")
+
     local mode_label = review_types.mode_labels[M.review_mode] or ""
     if mode_label ~= "" then
         mode_label = " (" .. mode_label .. ")"
@@ -244,31 +271,18 @@ function M.render()
         ))
     end
 
-    table.insert(lines, "")
-    table.insert(
-        lines,
-        "────────────────────────────────────────"
-    )
-    local function dialog_key(desc, fallback)
-        local maps = vim.api.nvim_buf_get_keymap(M.dialog_bufnr, "n")
-        for _, map in ipairs(maps) do
-            if map.desc == desc then
-                local kd = require("vibe.review.keymap_display")
-                return kd.format_key_display(map.lhs)
-            end
-        end
-        return fallback
-    end
-    local k_accept = dialog_key("Accept file", "<leader>a")
-    local k_reject = dialog_key("Reject file", "<leader>r")
-    table.insert(lines, string.format("<CR> view  |  %s accept  |  %s reject  |  A accept all  |  q back", k_accept, k_reject))
-
     vim.bo[M.dialog_bufnr].modifiable = true
     vim.api.nvim_buf_set_lines(M.dialog_bufnr, 0, -1, false, lines)
     vim.bo[M.dialog_bufnr].modifiable = false
 
+    -- Hint bar + separator highlights
+    vim.api.nvim_buf_add_highlight(M.dialog_bufnr, -1, "VibeDialogFooter", 0, 0, -1)
+    vim.api.nvim_buf_add_highlight(M.dialog_bufnr, -1, "VibeDialogFooter", 1, 0, -1)
+    -- Section header (mode label)
+    vim.api.nvim_buf_add_highlight(M.dialog_bufnr, -1, "VibeDialogHeader", 2, 0, -1)
+
     for i, file in ipairs(M.changed_files) do
-        local line_idx = i + 1
+        local line_idx = i + FILES_OFFSET - 1 -- 0-indexed line of this file row
         local file_info = M.file_status_cache[file]
         if i == M.selected_idx then
             vim.api.nvim_buf_add_highlight(M.dialog_bufnr, -1, "VibeDialogSelected", line_idx, 0, -1)
@@ -279,19 +293,14 @@ function M.render()
         end
     end
 
-    vim.api.nvim_buf_add_highlight(M.dialog_bufnr, -1, "VibeDialogHeader", 0, 0, -1)
-    local extra_lines = M.ignored_count > 0 and 2 or 0
-    local footer_start = #M.changed_files + 3 + extra_lines
     if M.ignored_count > 0 then
-        local hint_line_idx = #M.changed_files + 3
+        local hint_line_idx = #M.changed_files + FILES_OFFSET + 1 -- the omitted-files note
         vim.api.nvim_buf_add_highlight(M.dialog_bufnr, -1, "Comment", hint_line_idx, 0, -1)
     end
-    vim.api.nvim_buf_add_highlight(M.dialog_bufnr, -1, "VibeDialogFooter", footer_start, 0, -1)
-    vim.api.nvim_buf_add_highlight(M.dialog_bufnr, -1, "VibeDialogFooter", footer_start + 1, 0, -1)
 
     -- Move cursor to selected line so the window scrolls to keep it visible
     if M.dialog_winid and vim.api.nvim_win_is_valid(M.dialog_winid) then
-        vim.api.nvim_win_set_cursor(M.dialog_winid, { M.selected_idx + 2, 0 })
+        vim.api.nvim_win_set_cursor(M.dialog_winid, { M.selected_idx + FILES_OFFSET, 0 })
     end
 end
 
@@ -329,7 +338,8 @@ function M.setup_keymaps()
     vim.keymap.set("n", "<CR>", M.jump_to_file, opts)
     vim.keymap.set("n", "A", M.accept_all, opts)
 
-    -- File-level accept: 3-way merge (preserves changes from other sessions)
+    -- File-level accept: 3-way merge (preserves changes from other sessions).
+    -- Conflicts in the file auto-resolve to AI's version.
     vim.keymap.set("n", "<leader>a", function()
         if #M.changed_files == 0 then
             return
@@ -338,36 +348,19 @@ function M.setup_keymaps()
         if not file or not M.current_worktree_path then
             return
         end
-        local ok, err, conflict_count = git.merge_accept_file(
-            M.current_worktree_path, file, M.review_mode
+        local ok, err = git.merge_accept_file(
+            M.current_worktree_path, file, M.review_mode, nil, "ai"
         )
         if ok then
-            vim.notify("[Vibe] File accepted (merged): " .. file, vim.log.levels.INFO)
+            vim.notify("[Vibe] File accepted (AI for conflicts): " .. file, vim.log.levels.INFO)
             M.refresh()
-        elseif err == "conflicts" then
-            vim.notify(
-                string.format("[Vibe] %s has %d conflict(s) - opening review", file, conflict_count),
-                vim.log.levels.WARN
-            )
-            local worktree_path = M.current_worktree_path
-            local review_mode = M.review_mode
-            M.close()
-            local info = git.get_worktree_info(worktree_path)
-            if info then
-                local user_file_path = info.repo_root .. "/" .. file
-                local dir = vim.fn.fnamemodify(user_file_path, ":h")
-                if vim.fn.isdirectory(dir) == 0 then
-                    vim.fn.mkdir(dir, "p")
-                end
-                vim.cmd("edit " .. vim.fn.fnameescape(user_file_path))
-                require("vibe.diff").show_for_file(worktree_path, file, review_mode)
-            end
         else
             vim.notify("[Vibe] Failed to accept: " .. (err or ""), vim.log.levels.ERROR)
         end
     end, vim.tbl_extend("force", opts, { desc = "Accept file" }))
 
-    -- File-level reject: keep user version, mark all hunks addressed
+    -- File-level reject: 3-way merge with all conflicts resolved to user's version.
+    -- Equivalent to "keep yours" for any conflicting hunks.
     vim.keymap.set("n", "<leader>r", function()
         if #M.changed_files == 0 then
             return
@@ -376,17 +369,26 @@ function M.setup_keymaps()
         if not file or not M.current_worktree_path then
             return
         end
-        local info = git.get_worktree_info(M.current_worktree_path)
-        if info then
-            local hunks = git.get_worktree_file_hunks(M.current_worktree_path, file, info.repo_root .. "/" .. file)
-            for _, hunk in ipairs(hunks or {}) do
-                git.mark_hunk_addressed(M.current_worktree_path, file, hunk, "rejected")
-            end
+        local ok, err = git.merge_accept_file(
+            M.current_worktree_path, file, M.review_mode, nil, "user"
+        )
+        if ok then
+            vim.notify("[Vibe] File rejected (yours for conflicts): " .. file, vim.log.levels.INFO)
+            M.refresh()
+        else
+            vim.notify("[Vibe] Failed to reject: " .. (err or ""), vim.log.levels.ERROR)
         end
-        git.sync_resolved_file(M.current_worktree_path, file, (info and info.repo_root or "") .. "/" .. file)
-        vim.notify("[Vibe] File rejected: " .. file, vim.log.levels.INFO)
-        M.refresh()
     end, vim.tbl_extend("force", opts, { desc = "Reject file" }))
+
+    -- cA: accept AI version for all conflicts across every file in the dialog.
+    vim.keymap.set("n", "cA", function()
+        M.resolve_all_conflicts("ai")
+    end, vim.tbl_extend("force", opts, { desc = "Accept AI in all conflicts" }))
+
+    -- cR: keep user version for all conflicts across every file in the dialog.
+    vim.keymap.set("n", "cR", function()
+        M.resolve_all_conflicts("user")
+    end, vim.tbl_extend("force", opts, { desc = "Reject AI in all conflicts" }))
 
     local function back_to_review()
         M.close()
@@ -394,6 +396,39 @@ function M.setup_keymaps()
     end
     vim.keymap.set("n", "q", back_to_review, opts)
     vim.keymap.set("n", "<Esc>", back_to_review, opts)
+end
+
+--- Bulk-resolve every conflicting file in the current dialog using `side` ("ai" or "user").
+--- Non-conflict files are merged normally so they get auto-accepted alongside.
+---@param side string "ai" or "user"
+function M.resolve_all_conflicts(side)
+    if not M.current_worktree_path or #M.changed_files == 0 then
+        return
+    end
+
+    local label = side == "ai" and "AI" or "yours"
+    local accepted, errors = 0, {}
+    for _, file in ipairs(M.changed_files) do
+        local ok, err = git.merge_accept_file(
+            M.current_worktree_path, file, M.review_mode, nil, side
+        )
+        if ok then
+            accepted = accepted + 1
+        else
+            table.insert(errors, file .. ": " .. (err or ""))
+        end
+    end
+
+    if accepted > 0 then
+        vim.notify(
+            string.format("[Vibe] Resolved %d file(s) using %s for conflicts", accepted, label),
+            vim.log.levels.INFO
+        )
+    end
+    if #errors > 0 then
+        vim.notify("[Vibe] Errors:\n" .. table.concat(errors, "\n"), vim.log.levels.ERROR)
+    end
+    M.refresh()
 end
 
 function M.refresh()

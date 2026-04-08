@@ -7,7 +7,8 @@ local util = require("vibe.util")
 
 local M = {}
 
-local HEADER_LINES = 2
+-- Header layout: hint bar, separator, title, separator (4 lines before items)
+local HEADER_LINES = 4
 local LINES_PER_ITEM = 2
 
 function M.gather_worktree_context(info)
@@ -324,6 +325,12 @@ function M.show_worktree_selector(worktrees)
 
     local function build_lines()
         local lines = {}
+        local sel_count = vim.tbl_count(selected)
+        table.insert(
+            lines,
+            string.format(" %d selected  |  <Space> toggle  |  a all  |  <CR> confirm  |  q cancel", sel_count)
+        )
+        table.insert(lines, " " .. string.rep("-", 50))
         table.insert(lines, " Merge Worktrees")
         table.insert(lines, " " .. string.rep("-", 50))
 
@@ -335,13 +342,6 @@ function M.show_worktree_selector(worktrees)
             table.insert(lines, string.format(" %s [%s] %s  %s", pointer, check, info.name, count_str))
             table.insert(lines, string.format("       %s", vim.fn.pathshorten(info.worktree_path)))
         end
-
-        table.insert(lines, "")
-        local sel_count = vim.tbl_count(selected)
-        table.insert(
-            lines,
-            string.format(" %d selected  |  <Space> toggle  |  a all  |  <CR> confirm  |  q cancel", sel_count)
-        )
         return lines
     end
 
@@ -365,8 +365,11 @@ function M.show_worktree_selector(worktrees)
         vim.bo[bufnr].modifiable = false
 
         vim.api.nvim_buf_clear_namespace(bufnr, ns, 0, -1)
-        vim.api.nvim_buf_add_highlight(bufnr, ns, "Title", 0, 0, -1)
+        -- Hint bar (line 0), separator (line 1), title (line 2), separator (line 3)
+        vim.api.nvim_buf_add_highlight(bufnr, ns, "Comment", 0, 0, -1)
         vim.api.nvim_buf_add_highlight(bufnr, ns, "Comment", 1, 0, -1)
+        vim.api.nvim_buf_add_highlight(bufnr, ns, "Title", 2, 0, -1)
+        vim.api.nvim_buf_add_highlight(bufnr, ns, "Comment", 3, 0, -1)
 
         for i, info in ipairs(worktrees) do
             local name_line = HEADER_LINES + (i - 1) * LINES_PER_ITEM
@@ -376,8 +379,6 @@ function M.show_worktree_selector(worktrees)
             end
             vim.api.nvim_buf_add_highlight(bufnr, ns, "Comment", path_line, 0, -1)
         end
-
-        vim.api.nvim_buf_add_highlight(bufnr, ns, "Comment", #new_lines - 1, 0, -1)
 
         if vim.api.nvim_win_is_valid(winid) then
             local target_line = HEADER_LINES + (cursor_idx - 1) * LINES_PER_ITEM + 1

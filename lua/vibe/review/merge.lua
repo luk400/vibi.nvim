@@ -7,8 +7,10 @@ local M = {}
 --- This is the headless equivalent of renderer._build_resolved_content, without sentinel logic.
 ---@param snapshot_lines string[] Base (snapshot) file lines
 ---@param regions table[] Classified regions with auto_resolved flags set
+---@param conflict_resolution string|nil When set ("ai" or "user"), auto-resolved CONFLICT regions
+---       use ai_lines or user_lines respectively. nil keeps the legacy fallback (user_lines).
 ---@return string[] Merged file content
-function M.build_resolved_content(snapshot_lines, regions)
+function M.build_resolved_content(snapshot_lines, regions, conflict_resolution)
     if #regions == 0 then
         return vim.deepcopy(snapshot_lines)
     end
@@ -51,8 +53,14 @@ function M.build_resolved_content(snapshot_lines, regions)
                 replacement = region.user_lines
             elseif region.classification == types.AI_ONLY then
                 replacement = region.ai_lines
+            elseif region.classification == types.CONFLICT then
+                if conflict_resolution == "ai" then
+                    replacement = region.ai_lines
+                else
+                    -- "user" or nil: keep user's version
+                    replacement = region.user_lines
+                end
             else
-                -- Conflict fallback: keep user's version
                 replacement = region.user_lines
             end
         else
@@ -84,8 +92,10 @@ end
 ---@param filepath string Relative file path
 ---@param repo_root string Repo root path
 ---@param merge_mode string "none"|"user"|"ai"|"both"
+---@param conflict_resolution string|nil "ai" or "user" — when set, all CONFLICT regions are
+---       force-resolved to that side (no remaining conflicts in the result).
 ---@return table { resolved_lines, has_conflicts, has_unresolved, auto_accept, classified_file, stats }
-function M.merge_file(worktree_path, filepath, repo_root, merge_mode)
+function M.merge_file(worktree_path, filepath, repo_root, merge_mode, conflict_resolution)
     local classifier = require("vibe.review.classifier")
     local git = require("vibe.git")
 
@@ -123,11 +133,25 @@ function M.merge_file(worktree_path, filepath, repo_root, merge_mode)
         end
     end
 
+    -- Force-resolve conflicts to a side ("ai" or "user") if requested
+    if conflict_resolution == "ai" or conflict_resolution == "user" then
+        for _, region in ipairs(classified_file.regions) do
+            if region.classification == types.CONFLICT and not region.auto_resolved then
+                region.auto_resolved = true
+                stats.auto_count = stats.auto_count + 1
+                if stats.conflict_count > 0 then
+                    stats.conflict_count = stats.conflict_count - 1
+                end
+            end
+        end
+    end
+
     -- Get snapshot (base) lines
     local snapshot_lines = git.get_worktree_snapshot_lines(worktree_path, filepath)
 
     -- Build merged content
-    local resolved_lines = M.build_resolved_content(snapshot_lines, classified_file.regions)
+    local resolved_lines =
+        M.build_resolved_content(snapshot_lines, classified_file.regions, conflict_resolution)
 
     return {
         resolved_lines = resolved_lines,

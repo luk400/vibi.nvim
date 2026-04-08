@@ -101,6 +101,15 @@ function M.setup(bufnr, handlers)
         vim.keymap.set("n", "<leader>c", handlers.done, vim.tbl_extend("force", opts, { desc = kd.DESC_DONE }))
     end
 
+    -- Bulk conflict resolution
+    vim.keymap.set("n", "cA", function()
+        require("vibe.review.renderer").resolve_all_conflicts(bufnr, "ai")
+    end, vim.tbl_extend("force", opts, { desc = kd.DESC_ACCEPT_ALL_CONFLICTS }))
+
+    vim.keymap.set("n", "cR", function()
+        require("vibe.review.renderer").resolve_all_conflicts(bufnr, "user")
+    end, vim.tbl_extend("force", opts, { desc = kd.DESC_REJECT_ALL_CONFLICTS }))
+
     -- Quit
     vim.keymap.set("n", "q", handlers.quit, vim.tbl_extend("force", opts, { desc = kd.DESC_QUIT }))
     vim.keymap.set("n", "<Esc>", handlers.quit, vim.tbl_extend("force", opts, { desc = kd.DESC_QUIT }))

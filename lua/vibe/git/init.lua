@@ -66,8 +66,10 @@ function M.accept_all_from_worktree(worktree_path)
     return apply.accept_all_from_worktree(M.worktrees, worktree_path, M.get_worktree_changed_files)
 end
 
-function M.merge_accept_file(worktree_path, filepath, merge_mode, repo_root)
-    return apply.merge_accept_file(M.worktrees, worktree_path, filepath, merge_mode, repo_root)
+function M.merge_accept_file(worktree_path, filepath, merge_mode, repo_root, conflict_resolution)
+    return apply.merge_accept_file(
+        M.worktrees, worktree_path, filepath, merge_mode, repo_root, conflict_resolution
+    )
 end
 
 function M.merge_accept_all(worktree_path, merge_mode)

@@ -35,15 +35,16 @@ function M.restore_return_location()
     end
 end
 
--- Named constants for list layout calculations
-local LIST_HEADER_LINES = 2 -- Title + separator line
+-- Named constants for list layout calculations.
+-- Headers are: hint bar + separator + title + separator (4 lines) before items.
+local LIST_HEADER_LINES = 4
 local LIST_LINES_PER_SESSION = 2 -- Name line + detail line
 local RESUME_LINES_PER_SESSION = 3 -- Name line + created line + path line
-local KILL_HEADER_LINES = 2 -- Title + separator
+local KILL_HEADER_LINES = 4
 local KILL_LINES_PER_SESSION = 1 -- Single line per session
-local BROWSE_HEADER_LINES = 4 -- Title + separator + path + separator
+local BROWSE_HEADER_LINES = 6 -- hint + separator + title + separator + path + separator
 local BROWSE_LINES_PER_DIR = 1 -- One line per directory
-local SYNC_HEADER_LINES = 2 -- Title + separator
+local SYNC_HEADER_LINES = 4
 local SYNC_LINES_PER_SESSION = 2 -- Name line + path line
 
 function M.list()
@@ -82,6 +83,8 @@ function M.show_list()
         table.insert(lines, "")
         table.insert(lines, " Press <leader>v or :Vibe to start a session")
     else
+        table.insert(lines, " <CR> open n new d kill q close")
+        table.insert(lines, " " .. string.rep("─", 50))
         table.insert(lines, " Vibe Sessions")
         table.insert(lines, " " .. string.rep("─", 50))
         for _, info in ipairs(sessions) do
@@ -100,8 +103,6 @@ function M.show_list()
             table.insert(lines, string.format(" %s %s%s", icon, info.name, flag_str))
             table.insert(lines, string.format(" %s", vim.fn.pathshorten(info.cwd)))
         end
-        table.insert(lines, "")
-        table.insert(lines, " <CR> open n new d kill q close")
     end
 
     local bufnr, winid, close = util.create_centered_float({ lines = lines, filetype = "vibelist", min_width = 40 })
@@ -110,7 +111,14 @@ function M.show_list()
     if #sessions > 0 then
         vim.api.nvim_win_set_cursor(winid, { first_session_line, 2 })
     end
-    vim.api.nvim_buf_add_highlight(bufnr, -1, "Title", 0, 0, -1)
+    if #sessions > 0 then
+        vim.api.nvim_buf_add_highlight(bufnr, -1, "Comment", 0, 0, -1)
+        vim.api.nvim_buf_add_highlight(bufnr, -1, "Comment", 1, 0, -1)
+        vim.api.nvim_buf_add_highlight(bufnr, -1, "Title", 2, 0, -1)
+        vim.api.nvim_buf_add_highlight(bufnr, -1, "Comment", 3, 0, -1)
+    else
+        vim.api.nvim_buf_add_highlight(bufnr, -1, "Title", 0, 0, -1)
+    end
 
     for i, session in ipairs(sessions) do
         local line_num = LIST_HEADER_LINES + (i - 1) * LIST_LINES_PER_SESSION + 1
@@ -197,19 +205,25 @@ function M.show_kill_list()
         return
     end
 
-    local lines = { " Kill Vibe Session", " " .. string.rep("─", 30) }
+    local lines = {
+        " <CR> kill q cancel",
+        " " .. string.rep("─", 30),
+        " Kill Vibe Session",
+        " " .. string.rep("─", 30),
+    }
     for _, info in ipairs(sessions) do
         local icon = info.is_active and "◉" or (info.is_alive and "○" or "✗")
         table.insert(lines, string.format(" %s %s", icon, info.name))
     end
-    table.insert(lines, "")
-    table.insert(lines, " <CR> kill q cancel")
 
     local bufnr, winid, close = util.create_centered_float({ lines = lines, filetype = "vibekill", min_width = 40 })
 
     local kill_first_line = KILL_HEADER_LINES + 1
     vim.api.nvim_win_set_cursor(winid, { kill_first_line, 2 })
-    vim.api.nvim_buf_add_highlight(bufnr, -1, "Title", 0, 0, -1)
+    vim.api.nvim_buf_add_highlight(bufnr, -1, "Comment", 0, 0, -1)
+    vim.api.nvim_buf_add_highlight(bufnr, -1, "Comment", 1, 0, -1)
+    vim.api.nvim_buf_add_highlight(bufnr, -1, "Title", 2, 0, -1)
+    vim.api.nvim_buf_add_highlight(bufnr, -1, "Comment", 3, 0, -1)
 
     local function get_session_at_cursor()
         local cursor_line = vim.api.nvim_win_get_cursor(winid)[1]
@@ -266,7 +280,12 @@ function M.show_review_list()
         return
     end
 
-    local lines = { " Vibe Sessions with Changes", " " .. string.rep("─", 50) }
+    local lines = {
+        " <CR> review d discard q close",
+        " " .. string.rep("─", 50),
+        " Vibe Sessions with Changes",
+        " " .. string.rep("─", 50),
+    }
     for _, info in ipairs(worktrees) do
         local session = terminal.get_session(info.name)
         local is_active = session and status.is_recently_active(info.name)
@@ -283,8 +302,6 @@ function M.show_review_list()
         )
         table.insert(lines, string.format(" %s", vim.fn.pathshorten(info.repo_root)))
     end
-    table.insert(lines, "")
-    table.insert(lines, " <CR> review d discard q close")
 
     local bufnr, winid, close = util.create_centered_float({
         lines = lines,
@@ -296,7 +313,10 @@ function M.show_review_list()
 
     local review_first_line = LIST_HEADER_LINES + 1
     vim.api.nvim_win_set_cursor(winid, { review_first_line, 2 })
-    vim.api.nvim_buf_add_highlight(bufnr, -1, "Title", 0, 0, -1)
+    vim.api.nvim_buf_add_highlight(bufnr, -1, "Comment", 0, 0, -1)
+    vim.api.nvim_buf_add_highlight(bufnr, -1, "Comment", 1, 0, -1)
+    vim.api.nvim_buf_add_highlight(bufnr, -1, "Title", 2, 0, -1)
+    vim.api.nvim_buf_add_highlight(bufnr, -1, "Comment", 3, 0, -1)
 
     local function get_worktree_at_cursor()
         local cursor_line = vim.api.nvim_win_get_cursor(winid)[1]
@@ -329,23 +349,24 @@ function M.show_review_list()
             local large_files_mod = require("vibe.large_files")
 
             local function show_mode_picker()
-                -- Show review mode picker as float (4 options)
+                -- Show review mode picker as float (4 options).
+                -- Layout: hint bar, separator, title, separator, then 4 options.
                 local mode_lines = {
+                    " <CR> select  q cancel",
+                    " " .. string.rep("\xe2\x94\x80", 50),
                     " Select Merge Mode",
                     " " .. string.rep("\xe2\x94\x80", 50),
                     " 1. Auto-Merge All Safe (only review true conflicts)",
                     " 2. Auto-Merge User Only (review AI suggestions + conflicts)",
                     " 3. Auto-Merge AI Only (review your changes + conflicts)",
                     " 4. Review Everything (review all changes)",
-                    "",
-                    " <CR> select  q cancel",
                 }
-                -- Map line numbers to merge modes
-                local line_to_mode = { [3] = "both", [4] = "user", [5] = "ai", [6] = "none" }
-                local first_mode_line = 3
-                local last_mode_line = 6
-                -- Default cursor to line 4 (Auto-Merge User Only, matching default merge_mode)
-                local default_line = 4
+                -- Map line numbers to merge modes (1-indexed)
+                local line_to_mode = { [5] = "both", [6] = "user", [7] = "ai", [8] = "none" }
+                local first_mode_line = 5
+                local last_mode_line = 8
+                -- Default cursor to line 6 (Auto-Merge User Only, matching default merge_mode)
+                local default_line = 6
 
                 local mode_bufnr, mode_winid, mode_close = util.create_centered_float({
                     lines = mode_lines,
@@ -354,7 +375,10 @@ function M.show_review_list()
                     no_default_keymaps = true,
                 })
                 vim.api.nvim_win_set_cursor(mode_winid, { default_line, 2 })
-                vim.api.nvim_buf_add_highlight(mode_bufnr, -1, "Title", 0, 0, -1)
+                vim.api.nvim_buf_add_highlight(mode_bufnr, -1, "Comment", 0, 0, -1)
+                vim.api.nvim_buf_add_highlight(mode_bufnr, -1, "Comment", 1, 0, -1)
+                vim.api.nvim_buf_add_highlight(mode_bufnr, -1, "Title", 2, 0, -1)
+                vim.api.nvim_buf_add_highlight(mode_bufnr, -1, "Comment", 3, 0, -1)
                 vim.wo[mode_winid].cursorline = true
 
                 local function mode_select()
@@ -478,7 +502,12 @@ function M.pick_directory(callback)
     table.insert(options, { label = "Browse...", path = nil })
     table.insert(options, { label = "Custom path...", path = nil })
 
-    local lines = { " Select Working Directory", " " .. string.rep("─", 50) }
+    local lines = {
+        " <CR> select q cancel",
+        " " .. string.rep("─", 50),
+        " Select Working Directory",
+        " " .. string.rep("─", 50),
+    }
     for _, opt in ipairs(options) do
         if opt.path then
             table.insert(lines, string.format(" %s", opt.label))
@@ -487,17 +516,20 @@ function M.pick_directory(callback)
             table.insert(lines, string.format(" %s", opt.label))
         end
     end
-    table.insert(lines, "")
-    table.insert(lines, " <CR> select q cancel")
 
     local bufnr, winid, close = util.create_centered_float({ lines = lines, filetype = "vibepicker", min_width = 60 })
 
-    vim.api.nvim_win_set_cursor(winid, { 3, 2 })
-    vim.api.nvim_buf_add_highlight(bufnr, -1, "Title", 0, 0, -1)
+    -- 4 header lines (hint, separator, title, separator), so first option is at line 5
+    local FIRST_OPT_LINE = 5
+    vim.api.nvim_win_set_cursor(winid, { FIRST_OPT_LINE, 2 })
+    vim.api.nvim_buf_add_highlight(bufnr, -1, "Comment", 0, 0, -1)
+    vim.api.nvim_buf_add_highlight(bufnr, -1, "Comment", 1, 0, -1)
+    vim.api.nvim_buf_add_highlight(bufnr, -1, "Title", 2, 0, -1)
+    vim.api.nvim_buf_add_highlight(bufnr, -1, "Comment", 3, 0, -1)
 
     local function get_option_index()
         local cursor_line = vim.api.nvim_win_get_cursor(winid)[1]
-        local option_line = 3
+        local option_line = FIRST_OPT_LINE
         for i, opt in ipairs(options) do
             if cursor_line == option_line or (opt.path and cursor_line == option_line + 1) then
                 return i
@@ -536,7 +568,7 @@ function M.pick_directory(callback)
     local function move_next()
         local idx = get_option_index()
         if idx and idx < #options then
-            local target_line = 3
+            local target_line = FIRST_OPT_LINE
             for i = 1, idx do
                 target_line = target_line + (options[i].path and 2 or 1)
             end
@@ -547,7 +579,7 @@ function M.pick_directory(callback)
     local function move_prev()
         local idx = get_option_index()
         if idx and idx > 1 then
-            local target_line = 3
+            local target_line = FIRST_OPT_LINE
             for i = 1, idx - 2 do
                 target_line = target_line + (options[i].path and 2 or 1)
             end
@@ -661,6 +693,12 @@ function M.show_sync_selector()
 
     local function build_lines()
         local lines = {}
+        local sel_count = vim.tbl_count(selected)
+        table.insert(
+            lines,
+            string.format(" %d selected  |  <Space> toggle  |  a all  |  <CR> sync  |  q cancel", sel_count)
+        )
+        table.insert(lines, " " .. string.rep("-", 50))
         table.insert(lines, " Sync Sessions")
         table.insert(lines, " " .. string.rep("-", 50))
 
@@ -674,13 +712,6 @@ function M.show_sync_selector()
             table.insert(lines, string.format(" %s [%s] %s %s%s", pointer, check, icon, info.name, warn))
             table.insert(lines, string.format("       %s", vim.fn.pathshorten(info.cwd)))
         end
-
-        table.insert(lines, "")
-        local sel_count = vim.tbl_count(selected)
-        table.insert(
-            lines,
-            string.format(" %d selected  |  <Space> toggle  |  a all  |  <CR> sync  |  q cancel", sel_count)
-        )
         return lines
     end
 
@@ -704,8 +735,11 @@ function M.show_sync_selector()
         vim.bo[bufnr].modifiable = false
 
         vim.api.nvim_buf_clear_namespace(bufnr, ns, 0, -1)
-        vim.api.nvim_buf_add_highlight(bufnr, ns, "Title", 0, 0, -1)
+        -- Hint bar (line 0), separator (line 1), title (line 2), separator (line 3)
+        vim.api.nvim_buf_add_highlight(bufnr, ns, "Comment", 0, 0, -1)
         vim.api.nvim_buf_add_highlight(bufnr, ns, "Comment", 1, 0, -1)
+        vim.api.nvim_buf_add_highlight(bufnr, ns, "Title", 2, 0, -1)
+        vim.api.nvim_buf_add_highlight(bufnr, ns, "Comment", 3, 0, -1)
 
         for i, info in ipairs(sessions) do
             local name_line = SYNC_HEADER_LINES + (i - 1) * SYNC_LINES_PER_SESSION
@@ -717,8 +751,6 @@ function M.show_sync_selector()
             end
             vim.api.nvim_buf_add_highlight(bufnr, ns, "Comment", path_line, 0, -1)
         end
-
-        vim.api.nvim_buf_add_highlight(bufnr, ns, "Comment", #new_lines - 1, 0, -1)
 
         if vim.api.nvim_win_is_valid(winid) then
             local target_line = SYNC_HEADER_LINES + (cursor_idx - 1) * SYNC_LINES_PER_SESSION + 1
@@ -864,6 +896,8 @@ function M.browse_directory(callback, start_path)
         end)
 
         local lines = {
+            "  <CR> enter/select  <Tab> select this dir  q cancel",
+            "  " .. string.rep("─", 50),
             "  Browse Directory",
             "  " .. string.rep("─", 50),
             "  " .. vim.fn.pathshorten(path),
@@ -882,20 +916,24 @@ function M.browse_directory(callback, start_path)
         end
         table.insert(lines, "")
         table.insert(lines, "  (Only directories inside git repositories can be used)")
-        table.insert(lines, "  <CR> enter/select  <Tab> select this dir  q cancel")
 
         local bufnr, winid, close =
             util.create_centered_float({ lines = lines, filetype = "vibebrowser", min_width = 60, max_height = 20 })
 
+        local first_dir_line_1 = BROWSE_HEADER_LINES + 1 -- 1-indexed
         if #dirs > 0 then
-            vim.api.nvim_win_set_cursor(winid, { 6, 2 })
+            vim.api.nvim_win_set_cursor(winid, { first_dir_line_1, 2 })
         end
-        vim.api.nvim_buf_add_highlight(bufnr, -1, "Title", 0, 0, -1)
-        vim.api.nvim_buf_add_highlight(bufnr, -1, "Directory", 2, 0, -1)
+        vim.api.nvim_buf_add_highlight(bufnr, -1, "Comment", 0, 0, -1)
+        vim.api.nvim_buf_add_highlight(bufnr, -1, "Comment", 1, 0, -1)
+        vim.api.nvim_buf_add_highlight(bufnr, -1, "Title", 2, 0, -1)
+        vim.api.nvim_buf_add_highlight(bufnr, -1, "Comment", 3, 0, -1)
+        vim.api.nvim_buf_add_highlight(bufnr, -1, "Directory", 4, 0, -1)
+        vim.api.nvim_buf_add_highlight(bufnr, -1, "Comment", 5, 0, -1)
 
         local function get_dir_at_cursor()
             local cursor_line = vim.api.nvim_win_get_cursor(winid)[1]
-            local dir_idx = cursor_line - 5
+            local dir_idx = cursor_line - BROWSE_HEADER_LINES
             if dir_idx >= 1 and dir_idx <= #dirs then
                 return dirs[dir_idx]
             end
@@ -916,16 +954,14 @@ function M.browse_directory(callback, start_path)
         end, { buffer = bufnr, silent = true })
         local function browse_move_down()
             local cursor_line = vim.api.nvim_win_get_cursor(winid)[1]
-            local first_dir_line = BROWSE_HEADER_LINES + 2
-            if cursor_line - first_dir_line < #dirs - 1 then
+            if cursor_line - first_dir_line_1 < #dirs - 1 then
                 vim.api.nvim_win_set_cursor(winid, { cursor_line + 1, 2 })
             end
         end
 
         local function browse_move_up()
             local cursor_line = vim.api.nvim_win_get_cursor(winid)[1]
-            local first_dir_line = BROWSE_HEADER_LINES + 2
-            if cursor_line > first_dir_line then
+            if cursor_line > first_dir_line_1 then
                 vim.api.nvim_win_set_cursor(winid, { cursor_line - 1, 2 })
             end
         end
@@ -996,7 +1032,12 @@ function M.show_resume_list()
         return (a.created_at or 0) > (b.created_at or 0)
     end)
 
-    local lines = { " Resume Vibe Session", " " .. string.rep("─", 50) }
+    local lines = {
+        " <CR> resume n new d delete q cancel",
+        " " .. string.rep("─", 50),
+        " Resume Vibe Session",
+        " " .. string.rep("─", 50),
+    }
     for _, s in ipairs(resumable) do
         local file_count = 0
         if not git.worktrees[s.worktree_path] then
@@ -1024,8 +1065,6 @@ function M.show_resume_list()
         )
         table.insert(lines, string.format("    %s", vim.fn.pathshorten(s.worktree_path)))
     end
-    table.insert(lines, "")
-    table.insert(lines, " <CR> resume n new d delete q cancel")
 
     local bufnr, winid, close = util.create_centered_float({
         lines = lines,
@@ -1037,7 +1076,10 @@ function M.show_resume_list()
 
     local resume_first_line = LIST_HEADER_LINES + 1
     vim.api.nvim_win_set_cursor(winid, { resume_first_line, 2 })
-    vim.api.nvim_buf_add_highlight(bufnr, -1, "Title", 0, 0, -1)
+    vim.api.nvim_buf_add_highlight(bufnr, -1, "Comment", 0, 0, -1)
+    vim.api.nvim_buf_add_highlight(bufnr, -1, "Comment", 1, 0, -1)
+    vim.api.nvim_buf_add_highlight(bufnr, -1, "Title", 2, 0, -1)
+    vim.api.nvim_buf_add_highlight(bufnr, -1, "Comment", 3, 0, -1)
 
     local function get_session_at_cursor()
         local cursor_line = vim.api.nvim_win_get_cursor(winid)[1]

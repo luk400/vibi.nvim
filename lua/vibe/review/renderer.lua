@@ -1239,6 +1239,71 @@ function M.prev_item(bufnr)
     end
 end
 
+--- Bulk-resolve every CONFLICT review item in the buffer to a single side.
+--- Non-conflict review items are left untouched.
+---@param bufnr integer|nil
+---@param side string "ai" (keep AI version) or "user" (keep user version)
+function M.resolve_all_conflicts(bufnr, side)
+    bufnr = bufnr or vim.api.nvim_get_current_buf()
+    local state = M.buffer_state[bufnr]
+    if not state then
+        return
+    end
+
+    local resolved_count = 0
+    -- Process in reverse so earlier extmark positions stay valid as we mutate the buffer
+    for i = #state.review_items, 1, -1 do
+        local region = state.review_items[i]
+        if not region._resolved and region.classification == types.CONFLICT then
+            local start_row, end_row = get_current_range(bufnr, i)
+            if start_row then
+                pcall(vim.api.nvim_buf_del_extmark, bufnr, M.ns, i * 1000)
+                pcall(vim.api.nvim_buf_del_extmark, bufnr, M.ns, i * 1000 + 1)
+                pcall(vim.fn.sign_unplace, "vibe_review", { buffer = bufnr, id = i * 1000 })
+
+                if side == "user" then
+                    -- Replace displayed AI lines with user's stored lines
+                    local stored_lines = state.item_contents[i]
+                            and state.item_contents[i].stored_lines
+                        or {}
+                    vim.api.nvim_buf_set_lines(bufnr, start_row, end_row, false, stored_lines)
+                end
+                -- side == "ai": buffer already shows AI lines for CONFLICTs, nothing to replace.
+
+                region._resolved = true
+                state.resolved_count = state.resolved_count + 1
+                resolved_count = resolved_count + 1
+
+                local resolution = side == "ai" and "keep_ai" or "keep_user"
+                local action = resolve.resolution_to_action_v2(region.classification, resolution)
+                M._mark_region_addressed(state, region, action)
+            end
+        end
+    end
+
+    state._last_preview_idx = nil
+    M.close_preview()
+
+    if resolved_count == 0 then
+        vim.notify("[Vibe] No conflicts to resolve", vim.log.levels.INFO)
+        return
+    end
+
+    local label = side == "ai" and "Accepted AI" or "Kept yours"
+    vim.notify(
+        string.format("[Vibe] %s for %d conflict(s)", label, resolved_count),
+        vim.log.levels.INFO
+    )
+
+    local remaining = M.count_remaining(bufnr)
+    if remaining == 0 then
+        M.finalize_file(bufnr)
+    else
+        M.next_item(bufnr)
+        vim.defer_fn(M.show_preview, 50)
+    end
+end
+
 function M.accept_all(bufnr)
     bufnr = bufnr or vim.api.nvim_get_current_buf()
     local state = M.buffer_state[bufnr]

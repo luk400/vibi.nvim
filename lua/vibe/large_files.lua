@@ -310,6 +310,9 @@ function M.render()
     end
 
     local lines = {}
+    -- Hint bar at top
+    table.insert(lines, " <Space> cycle  |  <Tab> expand  |  <CR> confirm  |  q cancel")
+    table.insert(lines, " " .. string.rep("\xe2\x94\x80", 54))
     table.insert(lines, string.format(
         " Large Files Detected (%d file%s, %s)",
         total_files,
@@ -363,10 +366,6 @@ function M.render()
         end
     end
 
-    table.insert(lines, "")
-    table.insert(lines, " " .. string.rep("\xe2\x94\x80", 54))
-    table.insert(lines, " <Space> cycle  |  <Tab> expand  |  <CR> confirm  |  q cancel")
-
     vim.bo[M.bufnr].modifiable = true
     vim.api.nvim_buf_set_lines(M.bufnr, 0, -1, false, lines)
     vim.bo[M.bufnr].modifiable = false
@@ -375,13 +374,16 @@ function M.render()
     local ns = vim.api.nvim_create_namespace("vibe_large_files")
     vim.api.nvim_buf_clear_namespace(M.bufnr, ns, 0, -1)
 
-    -- Header
-    vim.api.nvim_buf_add_highlight(M.bufnr, ns, "Title", 0, 0, -1)
-    vim.api.nvim_buf_add_highlight(M.bufnr, ns, "Comment", 1, 0, -1)
+    -- Hint bar (lines 0-1) and section header (lines 2-3)
+    vim.api.nvim_buf_add_highlight(M.bufnr, ns, "VibeDialogFooter", 0, 0, -1)
+    vim.api.nvim_buf_add_highlight(M.bufnr, ns, "VibeDialogFooter", 1, 0, -1)
+    vim.api.nvim_buf_add_highlight(M.bufnr, ns, "Title", 2, 0, -1)
+    vim.api.nvim_buf_add_highlight(M.bufnr, ns, "Comment", 3, 0, -1)
 
-    -- Entries (starting at line 2)
+    -- Entries (starting after 4 header lines: hint, separator, title, separator)
+    local entries_offset = 4
     for i, entry in ipairs(M.flat_entries) do
-        local line_idx = i + 1
+        local line_idx = i - 1 + entries_offset -- 0-indexed
         if i == M.cursor_idx then
             vim.api.nvim_buf_add_highlight(M.bufnr, ns, "VibeDialogSelected", line_idx, 0, -1)
         else
@@ -394,18 +396,9 @@ function M.render()
         end
     end
 
-    -- Footer
-    local footer_start = #M.flat_entries + 3
-    if footer_start < #lines then
-        vim.api.nvim_buf_add_highlight(M.bufnr, ns, "Comment", footer_start, 0, -1)
-        if footer_start + 1 < #lines then
-            vim.api.nvim_buf_add_highlight(M.bufnr, ns, "VibeDialogFooter", footer_start + 1, 0, -1)
-        end
-    end
-
     -- Keep cursor on selected entry
     if M.winid and vim.api.nvim_win_is_valid(M.winid) then
-        vim.api.nvim_win_set_cursor(M.winid, { M.cursor_idx + 2, 0 })
+        vim.api.nvim_win_set_cursor(M.winid, { M.cursor_idx + entries_offset, 0 })
     end
 end
 

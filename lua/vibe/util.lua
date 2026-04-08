@@ -89,6 +89,8 @@ function M.check_remaining_files(worktree_path, review_mode)
 
         if #manual_files > 0 then
             local lines = {
+                " <CR>/q close",
+                " " .. string.rep("─", 50),
                 " Review Complete",
                 " " .. string.rep("─", 50),
                 "",
@@ -102,16 +104,17 @@ function M.check_remaining_files(worktree_path, review_mode)
             for _, f in ipairs(manual_files) do
                 table.insert(lines, "  • " .. f)
             end
-            table.insert(lines, "")
-            table.insert(lines, " <CR>/q close")
 
             local bufnr, winid, close = M.create_centered_float({
                 lines = lines,
                 filetype = "vibe_notification",
                 min_width = 60,
             })
-            vim.api.nvim_buf_add_highlight(bufnr, -1, "Title", 0, 0, -1)
-            vim.api.nvim_buf_add_highlight(bufnr, -1, "WarningMsg", 5, 0, -1)
+            vim.api.nvim_buf_add_highlight(bufnr, -1, "Comment", 0, 0, -1)
+            vim.api.nvim_buf_add_highlight(bufnr, -1, "Comment", 1, 0, -1)
+            vim.api.nvim_buf_add_highlight(bufnr, -1, "Title", 2, 0, -1)
+            vim.api.nvim_buf_add_highlight(bufnr, -1, "Comment", 3, 0, -1)
+            vim.api.nvim_buf_add_highlight(bufnr, -1, "WarningMsg", 7, 0, -1)
 
             vim.keymap.set("n", "<CR>", close, { buffer = bufnr, silent = true })
             vim.keymap.set("n", "q", close, { buffer = bufnr, silent = true })
