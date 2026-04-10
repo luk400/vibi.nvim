@@ -288,8 +288,9 @@ function M._reconstruct_side(base_lines, side_lines, side_ranges, indices, min_b
         -- Add unchanged base lines before this hunk
         local hunk_start = r.base_start
         if r.is_insert then
-            -- For insertions, unchanged lines go up to (but not including) the insertion point
-            while base_pos < hunk_start do
+            -- For insertions, include the anchor line BEFORE inserting new content.
+            -- Insertions go AFTER the anchor line (matching build_resolved_content).
+            while base_pos <= hunk_start and base_pos <= max_base do
                 table.insert(result, base_lines[base_pos] or "")
                 base_pos = base_pos + 1
             end
