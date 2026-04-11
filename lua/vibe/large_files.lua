@@ -1,7 +1,7 @@
 --- Large file detection and handling for :VibeReview
---- Shows a dialog for files above the size threshold, letting users choose:
----   ignore (default) / copy over / merge
---- before any heavy processing occurs.
+--- Shows a VibeCopyFiles-style toggle dialog for files above the size threshold,
+--- letting users select which large files to include in the review (default: none).
+--- Unselected files are ignored (not indexed, not committed, not reviewed).
 local config = require("vibe.config")
 local util = require("vibe.util")
 local persist = require("vibe.persist")
@@ -10,35 +10,18 @@ local M = {}
 
 -- Decision constants
 M.IGNORE = "ignore"
-M.COPY_OVER = "copy_over"
 M.MERGE = "merge"
-
--- Cycle order for Space key
-M.CYCLE = { M.IGNORE, M.COPY_OVER, M.MERGE }
-
--- Display labels for each decision
-M.LABELS = {
-    [M.IGNORE] = "ignore",
-    [M.COPY_OVER] = "copy over",
-    [M.MERGE] = "merge",
-}
-
--- Highlight groups for each decision
-M.HIGHLIGHTS = {
-    [M.IGNORE] = "VibeLargeFileIgnore",
-    [M.COPY_OVER] = "VibeLargeFileCopyOver",
-    [M.MERGE] = "VibeLargeFileMerge",
-}
 
 -- Dialog state
 M.bufnr = nil
 M.winid = nil
 M.cursor_idx = 1
-M.entries = {}
-M.flat_entries = {}
+M.entries = {}      -- Hierarchical (top-level dirs + files)
+M.flat_entries = {} -- Flattened for rendering (includes expanded dir children)
 M.worktree_path = nil
 M.worktree_info = nil
 M.on_complete = nil
+M.on_cancel = nil
 
 ---@param bytes integer
 ---@return string
@@ -60,7 +43,7 @@ end
 ---@param worktree_path string
 ---@param changed_files string[]
 ---@param repo_root string
----@return table[] entries Array of {type, path, size, children, expanded, decision}
+---@return table[] entries Array of {type, path, size, children, expanded, selected}
 ---@return boolean has_large
 ---@return integer total_size
 function M.detect_large_files(worktree_path, changed_files, repo_root)
@@ -112,7 +95,7 @@ function M.detect_large_files(worktree_path, changed_files, repo_root)
                     type = "file",
                     path = f.path,
                     size = f.size,
-                    decision = M.IGNORE,
+                    selected = false,
                 })
             end
             table.sort(children, function(a, b)
@@ -126,7 +109,7 @@ function M.detect_large_files(worktree_path, changed_files, repo_root)
                 file_count = #files,
                 children = children,
                 expanded = true,
-                decision = M.IGNORE,
+                selected = false,
             })
         end
     end
@@ -139,7 +122,7 @@ function M.detect_large_files(worktree_path, changed_files, repo_root)
                 type = "file",
                 path = f.path,
                 size = f.size,
-                decision = M.IGNORE,
+                selected = false,
             })
         end
     end
@@ -168,36 +151,62 @@ function M.build_flat_entries()
     end
 end
 
---- Cycle the decision for an entry. On a directory, applies to all children.
+--- Toggle selection on an entry. On a directory, toggles all children.
 ---@param entry table
-local function cycle_decision(entry)
-    local current = entry.decision or M.IGNORE
-    local next_idx = 1
-    for i, v in ipairs(M.CYCLE) do
-        if v == current then
-            next_idx = (i % #M.CYCLE) + 1
-            break
-        end
-    end
-    entry.decision = M.CYCLE[next_idx]
-
+local function toggle_selection(entry)
     if entry.type == "dir" and entry.children then
+        -- If any child is selected, deselect all; otherwise select all
+        local any_selected = false
         for _, child in ipairs(entry.children) do
-            child.decision = entry.decision
+            if child.selected then
+                any_selected = true
+                break
+            end
+        end
+        local new_state = not any_selected
+        entry.selected = new_state
+        for _, child in ipairs(entry.children) do
+            child.selected = new_state
+        end
+    else
+        entry.selected = not entry.selected
+    end
+end
+
+--- Sync directory entry selected state based on children.
+function M.sync_dir_selections()
+    for _, entry in ipairs(M.entries) do
+        if entry.type == "dir" and entry.children and #entry.children > 0 then
+            local all_selected = true
+            local any_selected = false
+            for _, child in ipairs(entry.children) do
+                if child.selected then
+                    any_selected = true
+                else
+                    all_selected = false
+                end
+            end
+            entry.selected = all_selected or any_selected
         end
     end
 end
 
---- Set a specific decision on an entry.
----@param entry table
----@param decision string
-local function set_decision(entry, decision)
-    entry.decision = decision
-    if entry.type == "dir" and entry.children then
-        for _, child in ipairs(entry.children) do
-            child.decision = decision
+--- Count how many files are selected (included in review).
+---@return integer
+function M.count_selected()
+    local n = 0
+    for _, entry in ipairs(M.entries) do
+        if entry.type == "file" and entry.selected then
+            n = n + 1
+        elseif entry.type == "dir" and entry.children then
+            for _, child in ipairs(entry.children) do
+                if child.selected then
+                    n = n + 1
+                end
+            end
         end
     end
+    return n
 end
 
 --- Load previously stored decisions for this worktree.
@@ -235,22 +244,24 @@ function M.save_decisions(worktree_path, decisions)
 end
 
 --- Collect decisions from dialog entries into a flat table.
+--- Selected = "merge" (include in review), unselected = "ignore" (exclude).
 ---@return table<string, string>
 function M.collect_decisions()
     local decisions = {}
     for _, entry in ipairs(M.entries) do
         if entry.type == "file" then
-            decisions[entry.path] = entry.decision
+            decisions[entry.path] = entry.selected and M.MERGE or M.IGNORE
         elseif entry.type == "dir" and entry.children then
             for _, child in ipairs(entry.children) do
-                decisions[child.path] = child.decision
+                decisions[child.path] = child.selected and M.MERGE or M.IGNORE
             end
         end
     end
     return decisions
 end
 
---- Execute "copy over" and "ignore" actions. Returns files remaining for merge.
+--- Execute decisions. "ignore" files are excluded downstream.
+--- "merge" files proceed to review.
 ---@param worktree_path string
 ---@param worktree_info table
 ---@param decisions table<string, string>
@@ -260,32 +271,31 @@ function M.execute_decisions(worktree_path, worktree_info, decisions)
         return {}
     end
 
-    local repo_root = worktree_info.repo_root
     local merge_files = {}
-
     for filepath, decision in pairs(decisions) do
-        if decision == M.COPY_OVER then
-            local src = worktree_path .. "/" .. filepath
-            local dst = repo_root .. "/" .. filepath
-            local dst_dir = vim.fn.fnamemodify(dst, ":h")
-            if vim.fn.isdirectory(dst_dir) == 0 then
-                vim.fn.mkdir(dst_dir, "p")
-            end
-            -- Use system cp to avoid loading large files into Lua memory
-            if vim.fn.filereadable(src) == 1 then
-                vim.fn.system({ "cp", "--", src, dst })
-                local bufnr = vim.fn.bufnr(dst)
-                if bufnr ~= -1 then
-                    vim.cmd("checktime " .. bufnr)
-                end
-            end
-        elseif decision == M.MERGE then
+        if decision == M.MERGE then
             table.insert(merge_files, filepath)
         end
         -- M.IGNORE: no action needed, file excluded downstream via large_file_decisions
     end
 
     return merge_files
+end
+
+--- Check if an entry is a child of a directory (for indentation).
+---@param entry table
+---@return boolean
+local function is_child_entry(entry)
+    for _, top_entry in ipairs(M.entries) do
+        if top_entry.type == "dir" and top_entry.children then
+            for _, child in ipairs(top_entry.children) do
+                if child == entry then
+                    return true
+                end
+            end
+        end
+    end
+    return false
 end
 
 --- Render the dialog buffer.
@@ -309,61 +319,64 @@ function M.render()
         end
     end
 
+    local selected_count = M.count_selected()
     local lines = {}
-    -- Hint bar at top
-    table.insert(lines, " <Space> cycle  |  <Tab> expand  |  <CR> confirm  |  q cancel")
-    table.insert(lines, " " .. string.rep("\xe2\x94\x80", 54))
+    local hl_data = {} -- {line_idx, hl_group}
+
+    -- Hint bar at top (VibeCopyFiles style)
     table.insert(lines, string.format(
-        " Large Files Detected (%d file%s, %s)",
-        total_files,
-        total_files == 1 and "" or "s",
+        " %d of %d file(s) included  |  <Space> toggle  |  <CR>/<Esc>/q close",
+        selected_count, total_files
+    ))
+    table.insert(hl_data, { 0, "VibePickerFooter" })
+    table.insert(lines, " " .. string.rep("\xe2\x94\x80", 60))
+    table.insert(hl_data, { 1, "VibePickerFooter" })
+    table.insert(lines, string.format(
+        " Large files detected (%s total) \xe2\x80\x94 select files to include in review:",
         M.format_size(total_size)
     ))
-    table.insert(lines, " " .. string.rep("\xe2\x94\x80", 54))
+    table.insert(hl_data, { 2, "VibePickerHeader" })
+    table.insert(lines, "")
+
+    -- 4 lines of header before items
+    local items_offset = 4
 
     for i, entry in ipairs(M.flat_entries) do
-        local is_selected = i == M.cursor_idx
-        local pointer = is_selected and "\xe2\x96\xb6 " or "  "
-        local label = M.LABELS[entry.decision] or "ignore"
-        local badge = string.format("[%s]", label)
+        local pointer = i == M.cursor_idx and "\xe2\x96\xb6" or " "
+        local check = entry.selected and "\xe2\x9c\x93" or " "
 
         if entry.type == "dir" then
             local arrow = entry.expanded and "\xe2\x96\xbc" or "\xe2\x96\xb8"
             table.insert(lines, string.format(
-                " %s%-12s %s %s  (%d file%s, %s)",
-                pointer,
-                badge,
-                arrow,
-                entry.path,
+                " %s %s %s %s  (%d file%s, %s)",
+                pointer, check, arrow, entry.path,
                 entry.file_count or #entry.children,
                 (entry.file_count or #entry.children) == 1 and "" or "s",
                 M.format_size(entry.size)
             ))
         else
-            -- Check if this is a child of a directory (indented)
-            local indent = ""
-            for _, top_entry in ipairs(M.entries) do
-                if top_entry.type == "dir" and top_entry.children then
-                    for _, child in ipairs(top_entry.children) do
-                        if child == entry then
-                            indent = "  "
-                            break
-                        end
-                    end
-                end
-            end
-            local display_name = indent .. vim.fn.fnamemodify(entry.path, ":t")
-            if indent == "" then
-                display_name = entry.path
-            end
+            local indent = is_child_entry(entry) and "    " or ""
+            local display_name = indent .. (indent ~= "" and vim.fn.fnamemodify(entry.path, ":t") or entry.path)
             table.insert(lines, string.format(
-                " %s%-12s %s  (%s)",
-                pointer,
-                badge,
-                display_name,
+                " %s %s %s  (%s)",
+                pointer, check, display_name,
                 M.format_size(entry.size)
             ))
         end
+
+        -- Determine highlight
+        local line_idx = #lines - 1
+        local hl_group
+        if i == M.cursor_idx then
+            hl_group = "VibeDialogSelected"
+        elseif entry.type == "dir" then
+            hl_group = "VibePickerDir"
+        elseif entry.selected then
+            hl_group = "VibePickerSelected"
+        else
+            hl_group = "VibeLargeFileIgnore"
+        end
+        table.insert(hl_data, { line_idx, hl_group })
     end
 
     vim.bo[M.bufnr].modifiable = true
@@ -371,34 +384,17 @@ function M.render()
     vim.bo[M.bufnr].modifiable = false
 
     -- Apply highlights
-    local ns = vim.api.nvim_create_namespace("vibe_large_files")
-    vim.api.nvim_buf_clear_namespace(M.bufnr, ns, 0, -1)
-
-    -- Hint bar (lines 0-1) and section header (lines 2-3)
-    vim.api.nvim_buf_add_highlight(M.bufnr, ns, "VibeDialogFooter", 0, 0, -1)
-    vim.api.nvim_buf_add_highlight(M.bufnr, ns, "VibeDialogFooter", 1, 0, -1)
-    vim.api.nvim_buf_add_highlight(M.bufnr, ns, "Title", 2, 0, -1)
-    vim.api.nvim_buf_add_highlight(M.bufnr, ns, "Comment", 3, 0, -1)
-
-    -- Entries (starting after 4 header lines: hint, separator, title, separator)
-    local entries_offset = 4
-    for i, entry in ipairs(M.flat_entries) do
-        local line_idx = i - 1 + entries_offset -- 0-indexed
-        if i == M.cursor_idx then
-            vim.api.nvim_buf_add_highlight(M.bufnr, ns, "VibeDialogSelected", line_idx, 0, -1)
-        else
-            local hl = M.HIGHLIGHTS[entry.decision] or "VibeLargeFileIgnore"
-            if entry.type == "dir" then
-                vim.api.nvim_buf_add_highlight(M.bufnr, ns, "VibeLargeFileDir", line_idx, 0, -1)
-            else
-                vim.api.nvim_buf_add_highlight(M.bufnr, ns, hl, line_idx, 0, -1)
-            end
-        end
+    for _, hl in ipairs(hl_data) do
+        vim.api.nvim_buf_add_highlight(M.bufnr, -1, hl[2], hl[1], 0, -1)
     end
 
     -- Keep cursor on selected entry
     if M.winid and vim.api.nvim_win_is_valid(M.winid) then
-        vim.api.nvim_win_set_cursor(M.winid, { M.cursor_idx + entries_offset, 0 })
+        local cursor_line = M.cursor_idx + items_offset
+        if cursor_line > #lines then
+            cursor_line = #lines
+        end
+        pcall(vim.api.nvim_win_set_cursor, M.winid, { cursor_line, 0 })
     end
 end
 
@@ -425,13 +421,15 @@ function M.setup_keymaps()
     vim.keymap.set("n", "k", move_up, opts)
     vim.keymap.set("n", "<Up>", move_up, opts)
 
-    -- Space: cycle decision
+    -- Space: toggle selection and advance cursor (VibeCopyFiles style)
     vim.keymap.set("n", "<Space>", function()
         local entry = M.flat_entries[M.cursor_idx]
         if entry then
-            cycle_decision(entry)
-            -- If child changed, sync parent dir decision if all children match
-            M.sync_dir_decisions()
+            toggle_selection(entry)
+            M.sync_dir_selections()
+            if M.cursor_idx < #M.flat_entries then
+                M.cursor_idx = M.cursor_idx + 1
+            end
             M.render()
         end
     end, opts)
@@ -442,7 +440,6 @@ function M.setup_keymaps()
         if entry and entry.type == "dir" then
             entry.expanded = not entry.expanded
             M.build_flat_entries()
-            -- Clamp cursor
             if M.cursor_idx > #M.flat_entries then
                 M.cursor_idx = #M.flat_entries
             end
@@ -450,84 +447,31 @@ function M.setup_keymaps()
         end
     end, opts)
 
-    -- Direct decision shortcuts
-    vim.keymap.set("n", "i", function()
-        local entry = M.flat_entries[M.cursor_idx]
-        if entry then
-            set_decision(entry, M.IGNORE)
-            M.sync_dir_decisions()
-            M.render()
-        end
-    end, opts)
-
-    vim.keymap.set("n", "c", function()
-        local entry = M.flat_entries[M.cursor_idx]
-        if entry then
-            set_decision(entry, M.COPY_OVER)
-            M.sync_dir_decisions()
-            M.render()
-        end
-    end, opts)
-
-    vim.keymap.set("n", "m", function()
-        local entry = M.flat_entries[M.cursor_idx]
-        if entry then
-            set_decision(entry, M.MERGE)
-            M.sync_dir_decisions()
-            M.render()
-        end
-    end, opts)
-
-    -- Enter: confirm
-    vim.keymap.set("n", "<CR>", function()
+    -- All close paths save decisions so the dialog doesn't re-appear
+    local function confirm_and_close()
         local decisions = M.collect_decisions()
         local on_complete = M.on_complete
         M.close()
         if on_complete then
             on_complete(decisions)
         end
-    end, opts)
-
-    -- Cancel
-    local function cancel()
-        local on_cancel = M.on_cancel
-        M.close()
-        if on_cancel then
-            on_cancel()
-        end
     end
-    vim.keymap.set("n", "q", cancel, opts)
-    vim.keymap.set("n", "<Esc>", cancel, opts)
-end
 
---- Sync directory entry decisions based on children (if all children match, dir matches).
-function M.sync_dir_decisions()
-    for _, entry in ipairs(M.entries) do
-        if entry.type == "dir" and entry.children and #entry.children > 0 then
-            local first = entry.children[1].decision
-            local all_same = true
-            for _, child in ipairs(entry.children) do
-                if child.decision ~= first then
-                    all_same = false
-                    break
-                end
-            end
-            if all_same then
-                entry.decision = first
-            end
-        end
-    end
+    vim.keymap.set("n", "<CR>", confirm_and_close, opts)
+    vim.keymap.set("n", "q", confirm_and_close, opts)
+    vim.keymap.set("n", "<Esc>", confirm_and_close, opts)
 end
 
 function M.close()
+    -- Clear callbacks before closing window to prevent WinClosed autocmd from double-firing
+    M.on_complete = nil
+    M.on_cancel = nil
     if M.winid and vim.api.nvim_win_is_valid(M.winid) then
         vim.api.nvim_win_close(M.winid, true)
     end
     M.winid = nil
     M.bufnr = nil
     M.cursor_idx = 1
-    M.on_complete = nil
-    M.on_cancel = nil
 end
 
 --- Show the large file dialog. Calls on_complete(decisions) when user confirms.
@@ -555,11 +499,11 @@ function M.show(worktree_path, worktree_info, changed_files, on_complete, on_can
     if next(saved) then
         for _, entry in ipairs(entries) do
             if entry.type == "file" and saved[entry.path] then
-                entry.decision = saved[entry.path]
+                entry.selected = saved[entry.path] == M.MERGE
             elseif entry.type == "dir" and entry.children then
                 for _, child in ipairs(entry.children) do
                     if saved[child.path] then
-                        child.decision = saved[child.path]
+                        child.selected = saved[child.path] == M.MERGE
                     end
                 end
             end
@@ -574,16 +518,14 @@ function M.show(worktree_path, worktree_info, changed_files, on_complete, on_can
     M.cursor_idx = 1
 
     M.build_flat_entries()
-
-    -- Sync dir decisions from loaded children
-    M.sync_dir_decisions()
+    M.sync_dir_selections()
 
     local target_height = math.min(25, #M.flat_entries + 6)
     local bufnr, winid, _ = util.create_centered_float({
         filetype = "vibe_large_files",
         min_width = 70,
         height = target_height,
-        title = "Vibe: Large Files",
+        title = "Large Files: " .. (worktree_info.name or "unknown"),
         cursorline = true,
         zindex = 210,
         no_default_keymaps = true,
@@ -595,6 +537,27 @@ function M.show(worktree_path, worktree_info, changed_files, on_complete, on_can
 
     M.render()
     M.setup_keymaps()
+
+    -- Handle external window close (e.g., :q) — save decisions so the dialog
+    -- doesn't keep re-appearing and the workflow chain isn't stuck.
+    vim.api.nvim_create_autocmd("WinClosed", {
+        pattern = tostring(winid),
+        once = true,
+        callback = function()
+            if M.on_complete then
+                local decisions = M.collect_decisions()
+                local on_complete = M.on_complete
+                M.on_complete = nil
+                M.on_cancel = nil
+                M.winid = nil
+                M.bufnr = nil
+                M.cursor_idx = 1
+                vim.schedule(function()
+                    on_complete(decisions)
+                end)
+            end
+        end,
+    })
 end
 
 return M

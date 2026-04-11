@@ -1,6 +1,7 @@
 local terminal = require("vibe.terminal")
 local status = require("vibe.status")
 local git = require("vibe.git")
+local config = require("vibe.config")
 local persist = require("vibe.persist")
 local util = require("vibe.util")
 
@@ -273,212 +274,250 @@ end
 
 function M.show_review_list()
     vim.cmd("silent! wall")
-    local worktrees = git.get_worktrees_with_unresolved_files()
-    if #worktrees == 0 then
-        vim.notify("[Vibe] No sessions with unresolved changes", vim.log.levels.INFO)
-        M.restore_return_location()
-        return
+
+    -- Upfront large file detection: scan worktrees and prompt for undecided large files
+    -- BEFORE the expensive get_unresolved_files() calls, so that decided files get skipped.
+    git.scan_for_vibe_worktrees()
+    local large_files_mod = require("vibe.large_files")
+    local lf_config = config.options.large_files
+    local pending_lf = {}
+
+    if lf_config and lf_config.enabled then
+        for _, info in pairs(git.worktrees) do
+            local changed_files = git.get_worktree_changed_files(info.worktree_path)
+            if #changed_files > 0 then
+                local entries, has_large = large_files_mod.detect_large_files(
+                    info.worktree_path, changed_files, info.repo_root
+                )
+                if has_large then
+                    local saved = large_files_mod.load_decisions(info.worktree_path)
+                    local has_undecided = false
+                    for _, entry in ipairs(entries) do
+                        if entry.type == "file" and not saved[entry.path] then
+                            has_undecided = true
+                            break
+                        elseif entry.type == "dir" and entry.children then
+                            for _, child in ipairs(entry.children) do
+                                if not saved[child.path] then
+                                    has_undecided = true
+                                    break
+                                end
+                            end
+                            if has_undecided then break end
+                        end
+                    end
+                    if has_undecided then
+                        table.insert(pending_lf, { info = info, changed_files = changed_files })
+                    end
+                end
+            end
+        end
     end
 
-    local lines = {
-        " <CR> review d discard q close",
-        " " .. string.rep("─", 50),
-        " Vibe Sessions with Changes",
-        " " .. string.rep("─", 50),
-    }
-    for _, info in ipairs(worktrees) do
-        local session = terminal.get_session(info.name)
-        local is_active = session and status.is_recently_active(info.name)
-        local file_count = #git.get_unresolved_files(info.worktree_path)
-        table.insert(
-            lines,
-            string.format(
-                " %s %-20s (%d file%s)",
-                is_active and "◉" or "○",
-                info.name,
-                file_count,
-                file_count == 1 and "" or "s"
+    local function show_session_list()
+        local worktrees = git.get_worktrees_with_unresolved_files()
+        if #worktrees == 0 then
+            vim.notify("[Vibe] No sessions with unresolved changes", vim.log.levels.INFO)
+            M.restore_return_location()
+            return
+        end
+
+        local lines = {
+            " <CR> review d discard q close",
+            " " .. string.rep("─", 50),
+            " Vibe Sessions with Changes",
+            " " .. string.rep("─", 50),
+        }
+        for _, info in ipairs(worktrees) do
+            local session = terminal.get_session(info.name)
+            local is_active = session and status.is_recently_active(info.name)
+            local file_count = #git.get_unresolved_files(info.worktree_path)
+            table.insert(
+                lines,
+                string.format(
+                    " %s %-20s (%d file%s)",
+                    is_active and "◉" or "○",
+                    info.name,
+                    file_count,
+                    file_count == 1 and "" or "s"
+                )
             )
-        )
-        table.insert(lines, string.format(" %s", vim.fn.pathshorten(info.repo_root)))
-    end
+            table.insert(lines, string.format(" %s", vim.fn.pathshorten(info.repo_root)))
+        end
 
-    local bufnr, winid, close = util.create_centered_float({
-        lines = lines,
-        filetype = "vibereview",
-        min_width = 60,
-        title = "Vibe Review",
-        cursorline = true,
-    })
+        local bufnr, winid, close = util.create_centered_float({
+            lines = lines,
+            filetype = "vibereview",
+            min_width = 60,
+            title = "Vibe Review",
+            cursorline = true,
+        })
 
-    local review_first_line = LIST_HEADER_LINES + 1
-    vim.api.nvim_win_set_cursor(winid, { review_first_line, 2 })
-    vim.api.nvim_buf_add_highlight(bufnr, -1, "Comment", 0, 0, -1)
-    vim.api.nvim_buf_add_highlight(bufnr, -1, "Comment", 1, 0, -1)
-    vim.api.nvim_buf_add_highlight(bufnr, -1, "Title", 2, 0, -1)
-    vim.api.nvim_buf_add_highlight(bufnr, -1, "Comment", 3, 0, -1)
+        local review_first_line = LIST_HEADER_LINES + 1
+        vim.api.nvim_win_set_cursor(winid, { review_first_line, 2 })
+        vim.api.nvim_buf_add_highlight(bufnr, -1, "Comment", 0, 0, -1)
+        vim.api.nvim_buf_add_highlight(bufnr, -1, "Comment", 1, 0, -1)
+        vim.api.nvim_buf_add_highlight(bufnr, -1, "Title", 2, 0, -1)
+        vim.api.nvim_buf_add_highlight(bufnr, -1, "Comment", 3, 0, -1)
 
-    local function get_worktree_at_cursor()
-        local cursor_line = vim.api.nvim_win_get_cursor(winid)[1]
-        if cursor_line < review_first_line then
+        local function get_worktree_at_cursor()
+            local cursor_line = vim.api.nvim_win_get_cursor(winid)[1]
+            if cursor_line < review_first_line then
+                return nil, nil
+            end
+            local idx = math.floor((cursor_line - review_first_line) / LIST_LINES_PER_SESSION) + 1
+            if idx >= 1 and idx <= #worktrees then
+                return worktrees[idx], idx
+            end
             return nil, nil
         end
-        local idx = math.floor((cursor_line - review_first_line) / LIST_LINES_PER_SESSION) + 1
-        if idx >= 1 and idx <= #worktrees then
-            return worktrees[idx], idx
-        end
-        return nil, nil
-    end
 
-    vim.keymap.set("n", "<CR>", function()
-        local info = get_worktree_at_cursor()
-        if info then
-            if #git.get_unresolved_files(info.worktree_path) == 0 then
-                if #git.get_worktree_changed_files(info.worktree_path) > 0 then
-                    git.update_snapshot(info.worktree_path)
-                end
-                vim.notify("[Vibe] No unresolved files in this session", vim.log.levels.INFO)
-                close()
-                vim.defer_fn(M.show_review_list, 100)
-                return
-            end
-            close()
-
-            -- Check for large files before showing mode picker
-            local changed_files = git.get_worktree_changed_files(info.worktree_path)
-            local large_files_mod = require("vibe.large_files")
-
-            local function show_mode_picker()
-                -- Show review mode picker as float (4 options).
-                -- Layout: hint bar, separator, title, separator, then 4 options.
-                local mode_lines = {
-                    " <CR> select  q cancel",
-                    " " .. string.rep("\xe2\x94\x80", 50),
-                    " Select Merge Mode",
-                    " " .. string.rep("\xe2\x94\x80", 50),
-                    " 1. Auto-Merge All Safe (only review true conflicts)",
-                    " 2. Auto-Merge User Only (review AI suggestions + conflicts)",
-                    " 3. Auto-Merge AI Only (review your changes + conflicts)",
-                    " 4. Review Everything (review all changes)",
-                }
-                -- Map line numbers to merge modes (1-indexed)
-                local line_to_mode = { [5] = "both", [6] = "user", [7] = "ai", [8] = "none" }
-                local first_mode_line = 5
-                local last_mode_line = 8
-                -- Default cursor to line 6 (Auto-Merge User Only, matching default merge_mode)
-                local default_line = 6
-
-                local mode_bufnr, mode_winid, mode_close = util.create_centered_float({
-                    lines = mode_lines,
-                    filetype = "vibe_mode_select",
-                    min_width = 60,
-                    no_default_keymaps = true,
-                })
-                vim.api.nvim_win_set_cursor(mode_winid, { default_line, 2 })
-                vim.api.nvim_buf_add_highlight(mode_bufnr, -1, "Comment", 0, 0, -1)
-                vim.api.nvim_buf_add_highlight(mode_bufnr, -1, "Comment", 1, 0, -1)
-                vim.api.nvim_buf_add_highlight(mode_bufnr, -1, "Title", 2, 0, -1)
-                vim.api.nvim_buf_add_highlight(mode_bufnr, -1, "Comment", 3, 0, -1)
-                vim.wo[mode_winid].cursorline = true
-
-                local function mode_select()
-                    local cursor = vim.api.nvim_win_get_cursor(mode_winid)[1]
-                    local mode = line_to_mode[cursor] or "user"
-                    mode_close()
-                    require("vibe.dialog").show(info.worktree_path, info, mode)
-                end
-                local function mode_cancel()
-                    mode_close()
-                    M.show_review_list()
-                end
-                vim.keymap.set("n", "<CR>", mode_select, { buffer = mode_bufnr, silent = true })
-                vim.keymap.set("n", "q", mode_cancel, { buffer = mode_bufnr, silent = true })
-                vim.keymap.set("n", "<Esc>", mode_cancel, { buffer = mode_bufnr, silent = true })
-                vim.keymap.set("n", "j", function()
-                    local cursor = vim.api.nvim_win_get_cursor(mode_winid)[1]
-                    if cursor < last_mode_line then
-                        vim.api.nvim_win_set_cursor(mode_winid, { cursor + 1, 2 })
-                    end
-                end, { buffer = mode_bufnr, silent = true })
-                vim.keymap.set("n", "<Down>", function()
-                    local cursor = vim.api.nvim_win_get_cursor(mode_winid)[1]
-                    if cursor < last_mode_line then
-                        vim.api.nvim_win_set_cursor(mode_winid, { cursor + 1, 2 })
-                    end
-                end, { buffer = mode_bufnr, silent = true })
-                vim.keymap.set("n", "k", function()
-                    local cursor = vim.api.nvim_win_get_cursor(mode_winid)[1]
-                    if cursor > first_mode_line then
-                        vim.api.nvim_win_set_cursor(mode_winid, { cursor - 1, 2 })
-                    end
-                end, { buffer = mode_bufnr, silent = true })
-                vim.keymap.set("n", "<Up>", function()
-                    local cursor = vim.api.nvim_win_get_cursor(mode_winid)[1]
-                    if cursor > first_mode_line then
-                        vim.api.nvim_win_set_cursor(mode_winid, { cursor - 1, 2 })
-                    end
-                end, { buffer = mode_bufnr, silent = true })
-            end
-
-            large_files_mod.show(info.worktree_path, info, changed_files, function(decisions)
-                -- Execute immediate actions (copy over files, record ignores)
-                large_files_mod.execute_decisions(info.worktree_path, info, decisions)
-                large_files_mod.save_decisions(info.worktree_path, decisions)
-
-                -- Check if there are still unresolved files after large file handling
+        vim.keymap.set("n", "<CR>", function()
+            local info = get_worktree_at_cursor()
+            if info then
                 if #git.get_unresolved_files(info.worktree_path) == 0 then
                     if #git.get_worktree_changed_files(info.worktree_path) > 0 then
                         git.update_snapshot(info.worktree_path)
                     end
-                    vim.notify("[Vibe] All files handled. No remaining files to review.", vim.log.levels.INFO)
+                    vim.notify("[Vibe] No unresolved files in this session", vim.log.levels.INFO)
+                    close()
                     vim.defer_fn(M.show_review_list, 100)
                     return
                 end
+                close()
+
+                -- Large file decisions already handled upfront, go straight to mode picker
+                local function show_mode_picker()
+                    -- Show review mode picker as float (4 options).
+                    -- Layout: hint bar, separator, title, separator, then 4 options.
+                    local mode_lines = {
+                        " <CR> select  q cancel",
+                        " " .. string.rep("\xe2\x94\x80", 50),
+                        " Select Merge Mode",
+                        " " .. string.rep("\xe2\x94\x80", 50),
+                        " 1. Auto-Merge All Safe (only review true conflicts)",
+                        " 2. Auto-Merge User Only (review AI suggestions + conflicts)",
+                        " 3. Auto-Merge AI Only (review your changes + conflicts)",
+                        " 4. Review Everything (review all changes)",
+                    }
+                    -- Map line numbers to merge modes (1-indexed)
+                    local line_to_mode = { [5] = "both", [6] = "user", [7] = "ai", [8] = "none" }
+                    local first_mode_line = 5
+                    local last_mode_line = 8
+                    -- Default cursor to line 6 (Auto-Merge User Only, matching default merge_mode)
+                    local default_line = 6
+
+                    local mode_bufnr, mode_winid, mode_close = util.create_centered_float({
+                        lines = mode_lines,
+                        filetype = "vibe_mode_select",
+                        min_width = 60,
+                        no_default_keymaps = true,
+                    })
+                    vim.api.nvim_win_set_cursor(mode_winid, { default_line, 2 })
+                    vim.api.nvim_buf_add_highlight(mode_bufnr, -1, "Comment", 0, 0, -1)
+                    vim.api.nvim_buf_add_highlight(mode_bufnr, -1, "Comment", 1, 0, -1)
+                    vim.api.nvim_buf_add_highlight(mode_bufnr, -1, "Title", 2, 0, -1)
+                    vim.api.nvim_buf_add_highlight(mode_bufnr, -1, "Comment", 3, 0, -1)
+                    vim.wo[mode_winid].cursorline = true
+
+                    local function mode_select()
+                        local cursor = vim.api.nvim_win_get_cursor(mode_winid)[1]
+                        local mode = line_to_mode[cursor] or "user"
+                        mode_close()
+                        require("vibe.dialog").show(info.worktree_path, info, mode)
+                    end
+                    local function mode_cancel()
+                        mode_close()
+                        M.show_review_list()
+                    end
+                    vim.keymap.set("n", "<CR>", mode_select, { buffer = mode_bufnr, silent = true })
+                    vim.keymap.set("n", "q", mode_cancel, { buffer = mode_bufnr, silent = true })
+                    vim.keymap.set("n", "<Esc>", mode_cancel, { buffer = mode_bufnr, silent = true })
+                    vim.keymap.set("n", "j", function()
+                        local cursor = vim.api.nvim_win_get_cursor(mode_winid)[1]
+                        if cursor < last_mode_line then
+                            vim.api.nvim_win_set_cursor(mode_winid, { cursor + 1, 2 })
+                        end
+                    end, { buffer = mode_bufnr, silent = true })
+                    vim.keymap.set("n", "<Down>", function()
+                        local cursor = vim.api.nvim_win_get_cursor(mode_winid)[1]
+                        if cursor < last_mode_line then
+                            vim.api.nvim_win_set_cursor(mode_winid, { cursor + 1, 2 })
+                        end
+                    end, { buffer = mode_bufnr, silent = true })
+                    vim.keymap.set("n", "k", function()
+                        local cursor = vim.api.nvim_win_get_cursor(mode_winid)[1]
+                        if cursor > first_mode_line then
+                            vim.api.nvim_win_set_cursor(mode_winid, { cursor - 1, 2 })
+                        end
+                    end, { buffer = mode_bufnr, silent = true })
+                    vim.keymap.set("n", "<Up>", function()
+                        local cursor = vim.api.nvim_win_get_cursor(mode_winid)[1]
+                        if cursor > first_mode_line then
+                            vim.api.nvim_win_set_cursor(mode_winid, { cursor - 1, 2 })
+                        end
+                    end, { buffer = mode_bufnr, silent = true })
+                end
 
                 show_mode_picker()
-            end, function()
-                -- On cancel, go back to review list
-                M.show_review_list()
-            end)
-        end
-    end, { buffer = bufnr, silent = true })
+            end
+        end, { buffer = bufnr, silent = true })
 
-    vim.keymap.set("n", "d", function()
-        local info = get_worktree_at_cursor()
-        if info and vim.fn.confirm("Discard all changes in '" .. info.name .. "'?", "&Yes\n&No", 2) == 1 then
-            git.discard_worktree(info.worktree_path)
-            close()
-            vim.defer_fn(M.show_review_list, 100)
-        end
-    end, { buffer = bufnr, silent = true })
+        vim.keymap.set("n", "d", function()
+            local info = get_worktree_at_cursor()
+            if info and vim.fn.confirm("Discard all changes in '" .. info.name .. "'?", "&Yes\n&No", 2) == 1 then
+                git.discard_worktree(info.worktree_path)
+                close()
+                vim.defer_fn(M.show_review_list, 100)
+            end
+        end, { buffer = bufnr, silent = true })
 
-    vim.keymap.set("n", "j", function()
-        local _, idx = get_worktree_at_cursor()
-        if idx and idx < #worktrees then
-            vim.api.nvim_win_set_cursor(winid, { review_first_line + idx * LIST_LINES_PER_SESSION, 2 })
-        end
-    end, { buffer = bufnr, silent = true })
+        vim.keymap.set("n", "j", function()
+            local _, idx = get_worktree_at_cursor()
+            if idx and idx < #worktrees then
+                vim.api.nvim_win_set_cursor(winid, { review_first_line + idx * LIST_LINES_PER_SESSION, 2 })
+            end
+        end, { buffer = bufnr, silent = true })
 
-    vim.keymap.set("n", "<Down>", function()
-        local _, idx = get_worktree_at_cursor()
-        if idx and idx < #worktrees then
-            vim.api.nvim_win_set_cursor(winid, { review_first_line + idx * LIST_LINES_PER_SESSION, 2 })
-        end
-    end, { buffer = bufnr, silent = true })
+        vim.keymap.set("n", "<Down>", function()
+            local _, idx = get_worktree_at_cursor()
+            if idx and idx < #worktrees then
+                vim.api.nvim_win_set_cursor(winid, { review_first_line + idx * LIST_LINES_PER_SESSION, 2 })
+            end
+        end, { buffer = bufnr, silent = true })
 
-    vim.keymap.set("n", "k", function()
-        local _, idx = get_worktree_at_cursor()
-        if idx and idx > 1 then
-            vim.api.nvim_win_set_cursor(winid, { review_first_line + (idx - 2) * LIST_LINES_PER_SESSION, 2 })
-        end
-    end, { buffer = bufnr, silent = true })
+        vim.keymap.set("n", "k", function()
+            local _, idx = get_worktree_at_cursor()
+            if idx and idx > 1 then
+                vim.api.nvim_win_set_cursor(winid, { review_first_line + (idx - 2) * LIST_LINES_PER_SESSION, 2 })
+            end
+        end, { buffer = bufnr, silent = true })
 
-    vim.keymap.set("n", "<Up>", function()
-        local _, idx = get_worktree_at_cursor()
-        if idx and idx > 1 then
-            vim.api.nvim_win_set_cursor(winid, { review_first_line + (idx - 2) * LIST_LINES_PER_SESSION, 2 })
+        vim.keymap.set("n", "<Up>", function()
+            local _, idx = get_worktree_at_cursor()
+            if idx and idx > 1 then
+                vim.api.nvim_win_set_cursor(winid, { review_first_line + (idx - 2) * LIST_LINES_PER_SESSION, 2 })
+            end
+        end, { buffer = bufnr, silent = true })
+    end -- show_session_list
+
+    -- Chain large file dialogs for worktrees with undecided files, then show session list
+    local function process_pending_lf(idx)
+        if idx > #pending_lf then
+            show_session_list()
+            return
         end
-    end, { buffer = bufnr, silent = true })
+        local item = pending_lf[idx]
+        large_files_mod.show(item.info.worktree_path, item.info, item.changed_files, function(decisions)
+            large_files_mod.save_decisions(item.info.worktree_path, decisions)
+            process_pending_lf(idx + 1)
+        end, function()
+            -- Cancel: skip this worktree's large file decisions, continue
+            process_pending_lf(idx + 1)
+        end)
+    end
+
+    process_pending_lf(1)
 end
 
 function M.pick_directory(callback)

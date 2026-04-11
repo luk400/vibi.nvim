@@ -296,8 +296,16 @@ function M.update_snapshot(worktree_path)
         return false, "Worktree not found"
     end
 
-    -- Stage all current worktree state
-    git_cmd_mod.git_cmd({ "add", "-A" }, { cwd = worktree_path })
+    -- Stage all current worktree state, excluding ignored large files
+    local add_args = { "add", "-A" }
+    if info.large_file_decisions then
+        for filepath, decision in pairs(info.large_file_decisions) do
+            if decision == "ignore" then
+                table.insert(add_args, ":(exclude)" .. filepath)
+            end
+        end
+    end
+    git_cmd_mod.git_cmd(add_args, { cwd = worktree_path })
 
     -- Create new snapshot commit
     local _, commit_code, commit_err = git_cmd_mod.git_cmd(

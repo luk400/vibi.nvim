@@ -20,7 +20,7 @@ local M = {}
 ---@field log_path string|nil Path to the most recent scrollback log file
 ---@field addressed_hunks AddressedHunk[]|nil Hunks that have been explicitly addressed
 ---@field source_worktrees string[]|nil Worktree paths of sessions merged via conflict resolution
----@field large_file_decisions table<string, string>|nil Per-file decisions for large files ("ignore"|"copy_over"|"merge")
+---@field large_file_decisions table<string, string>|nil Per-file decisions for large files ("ignore"|"merge")
 
 --- Get the path to the sessions file
 ---@return string
