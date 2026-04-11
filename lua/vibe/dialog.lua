@@ -78,11 +78,31 @@ function M.show(worktree_path, worktree_info, review_mode)
     -- Filter out files handled by large file decisions (only "merge" files pass through)
     local lf_decisions = require("vibe.large_files").load_decisions(worktree_path)
     if next(lf_decisions) then
+        -- Collect ignored directory prefixes
+        local ignored_dirs = {}
+        for path, decision in pairs(lf_decisions) do
+            if decision == "ignore" and path:sub(-1) == "/" then
+                table.insert(ignored_dirs, path)
+            end
+        end
+
         local filtered = {}
         for _, f in ipairs(unresolved) do
             local d = lf_decisions[f]
-            if not d or d == "merge" then
-                table.insert(filtered, f)
+            if d and d ~= "merge" then
+                -- Explicit per-file decision to ignore/copy_over
+            else
+                -- Check directory-level decisions
+                local under_ignored_dir = false
+                for _, dir in ipairs(ignored_dirs) do
+                    if f:sub(1, #dir) == dir then
+                        under_ignored_dir = true
+                        break
+                    end
+                end
+                if not under_ignored_dir then
+                    table.insert(filtered, f)
+                end
             end
         end
         unresolved = filtered

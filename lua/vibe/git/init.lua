@@ -107,6 +107,17 @@ function M.get_worktree_changed_files(worktree_path)
         return {}
     end
 
+    -- Build exclude pathspecs from large file decisions so git never enumerates
+    -- ignored dirs/files (critical for large untracked folders like 16GB dirs)
+    local excludes = {}
+    if info.large_file_decisions then
+        for path, decision in pairs(info.large_file_decisions) do
+            if decision == "ignore" then
+                table.insert(excludes, ":(exclude)" .. path)
+            end
+        end
+    end
+
     local snapshot_commit = info.snapshot_commit
     if not snapshot_commit or snapshot_commit == "" then
         local first_commit = git_cmd_mod.git_cmd(
@@ -120,12 +131,26 @@ function M.get_worktree_changed_files(worktree_path)
         end
     end
 
+    local diff_args = { "diff", "--name-only", snapshot_commit }
+    local ls_args = { "ls-files", "--others", "--exclude-standard" }
+
+    if #excludes > 0 then
+        table.insert(diff_args, "--")
+        table.insert(diff_args, ".")
+        table.insert(ls_args, "--")
+        table.insert(ls_args, ".")
+        for _, exc in ipairs(excludes) do
+            table.insert(diff_args, exc)
+            table.insert(ls_args, exc)
+        end
+    end
+
     local output = git_cmd_mod.git_cmd(
-        { "diff", "--name-only", snapshot_commit },
+        diff_args,
         { cwd = worktree_path, ignore_error = true }
     )
     local untracked_output = git_cmd_mod.git_cmd(
-        { "ls-files", "--others", "--exclude-standard" },
+        ls_args,
         { cwd = worktree_path, ignore_error = true }
     )
 
@@ -195,6 +220,16 @@ function M.get_unresolved_files(worktree_path)
     local config = require("vibe.config")
     local threshold = config.options.large_files and config.options.large_files.threshold or 1048576
 
+    -- Collect ignored directory prefixes for fast prefix matching
+    local ignored_dirs = {}
+    if info.large_file_decisions then
+        for path, decision in pairs(info.large_file_decisions) do
+            if decision == "ignore" and path:sub(-1) == "/" then
+                table.insert(ignored_dirs, path)
+            end
+        end
+    end
+
     for _, filepath in ipairs(changed_files) do
         -- Skip files already handled by large file decisions
         local skip = false
@@ -202,6 +237,16 @@ function M.get_unresolved_files(worktree_path)
             local decision = info.large_file_decisions[filepath]
             if decision == "ignore" or decision == "copy_over" then
                 skip = true
+            end
+        end
+
+        -- Skip files under ignored directories
+        if not skip then
+            for _, dir in ipairs(ignored_dirs) do
+                if filepath:sub(1, #dir) == dir then
+                    skip = true
+                    break
+                end
             end
         end
 

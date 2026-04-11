@@ -166,6 +166,7 @@ describe("Large Files Detection and Dialog", function()
                 {
                     type = "dir",
                     path = "assets/",
+                    selected = true,
                     children = {
                         { type = "file", path = "assets/a.bin", selected = true },
                         { type = "file", path = "assets/b.bin", selected = false },
@@ -176,6 +177,27 @@ describe("Large Files Detection and Dialog", function()
             local decisions = large_files.collect_decisions()
             eq("merge", decisions["assets/a.bin"])
             eq("ignore", decisions["assets/b.bin"])
+            -- Directory-level decision reflects the dir entry's selected state
+            eq("merge", decisions["assets/"])
+        end)
+
+        it("stores directory-level ignore when dir is unselected", function()
+            large_files.entries = {
+                {
+                    type = "dir",
+                    path = "models/",
+                    selected = false,
+                    children = {
+                        { type = "file", path = "models/big1.bin", selected = false },
+                        { type = "file", path = "models/big2.bin", selected = false },
+                    },
+                },
+            }
+
+            local decisions = large_files.collect_decisions()
+            eq("ignore", decisions["models/"])
+            eq("ignore", decisions["models/big1.bin"])
+            eq("ignore", decisions["models/big2.bin"])
         end)
     end)
 

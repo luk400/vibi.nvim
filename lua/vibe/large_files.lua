@@ -252,6 +252,8 @@ function M.collect_decisions()
         if entry.type == "file" then
             decisions[entry.path] = entry.selected and M.MERGE or M.IGNORE
         elseif entry.type == "dir" and entry.children then
+            -- Store directory-level decision so entire dir can be excluded from git enumeration
+            decisions[entry.path] = entry.selected and M.MERGE or M.IGNORE
             for _, child in ipairs(entry.children) do
                 decisions[child.path] = child.selected and M.MERGE or M.IGNORE
             end
