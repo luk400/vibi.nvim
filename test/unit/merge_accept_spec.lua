@@ -191,6 +191,31 @@ describe("Merge accept", function()
             local conflict_content = vim.fn.readfile(repo_path .. "/conflict.txt")
             eq("A conflict change", conflict_content[1])
         end)
+
+        it("creates empty new AI files (e.g. __init__.py) in user repo", function()
+            local repo_path = helpers.create_test_repo("empty-new-ai", {
+                ["placeholder.txt"] = "placeholder",
+            })
+            local info = git.create_worktree("empty-new-ai-sess", repo_path)
+            assert.is_not_nil(info)
+
+            vim.fn.mkdir(info.worktree_path .. "/pkg", "p")
+            vim.fn.writefile({}, info.worktree_path .. "/pkg/__init__.py")
+            helpers.write_file(info.worktree_path .. "/pkg/mod.py", "print('hi')")
+
+            local result = git.merge_accept_all(info.worktree_path, "both")
+            assert.is_true(result.all_ok, "accept all should succeed")
+
+            local user_init = repo_path .. "/pkg/__init__.py"
+            eq(1, vim.fn.filereadable(user_init), "empty __init__.py should be created in user repo")
+            eq(0, vim.fn.getfsize(user_init), "created file should be empty")
+
+            local accepted_set = {}
+            for _, f in ipairs(result.accepted) do
+                accepted_set[f] = true
+            end
+            assert.is_true(accepted_set["pkg/__init__.py"], "empty file should appear in accepted list")
+        end)
     end)
 
     describe("build_resolved_content", function()

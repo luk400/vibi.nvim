@@ -94,6 +94,21 @@ describe("Hunk tracking", function()
         eq(true, fully, "File with no diff should be considered fully addressed")
     end)
 
+    it("is_file_fully_addressed returns false for empty new AI file missing from user repo", function()
+        local repo_path = helpers.create_test_repo("track-empty-new", {
+            ["placeholder.txt"] = "placeholder",
+        })
+        local info = git.create_worktree("track-empty-new-sess", repo_path)
+        assert.is_not_nil(info)
+
+        -- AI creates an empty __init__.py inside the worktree. User repo has no such file.
+        vim.fn.mkdir(info.worktree_path .. "/pkg", "p")
+        vim.fn.writefile({}, info.worktree_path .. "/pkg/__init__.py")
+
+        local fully = git.is_file_fully_addressed(info.worktree_path, "pkg/__init__.py")
+        eq(false, fully, "Empty new AI file not yet in user repo must not be treated as addressed")
+    end)
+
     it("mark_hunk_addressed persists to disk", function()
         local repo_path = helpers.create_test_repo("track-persist", {
             ["test.txt"] = "line 1\nline 2",

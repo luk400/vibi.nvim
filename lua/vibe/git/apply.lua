@@ -179,7 +179,10 @@ function M.is_file_fully_addressed(worktrees, worktree_path, filepath, get_hunks
     local worktree_file = worktree_path .. "/" .. filepath
     local user_file = info.repo_root .. "/" .. filepath
 
-    if vim.fn.filereadable(worktree_file) == 0 and vim.fn.filereadable(user_file) == 1 then
+    -- Existence mismatch means the file must still be created or deleted in the
+    -- user repo, so it isn't addressed. Catches empty new files (e.g. __init__.py)
+    -- where hunk-diff against a missing user file produces zero hunks.
+    if (vim.fn.filereadable(worktree_file) == 1) ~= (vim.fn.filereadable(user_file) == 1) then
         return false
     end
 
